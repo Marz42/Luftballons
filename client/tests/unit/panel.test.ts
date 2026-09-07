@@ -1,15 +1,13 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { bootstrap } from "../../src/bootstrap/bootstrap.js";
-import {
-  createChannelBasicStub,
-  createSubtitleMultilangStub,
-} from "../../src/modules/youtube-studio-stubs.js";
+import { createSubtitleMultilangStub } from "../../src/modules/youtube-studio-stubs.js";
 import { immediateWait } from "../../src/modules/step-control.js";
 import type { PanelHandle } from "../../src/ui/panel.js";
 import {
   mountStudioFixture,
   type StudioFixtureHandle,
 } from "../fixtures/studio-simulated.js";
+import { createFixtureChannelModule } from "./channel-basic-test-utils.js";
 
 describe("Luftballons panel UI", () => {
   let panel: PanelHandle | undefined;
@@ -31,7 +29,7 @@ describe("Luftballons panel UI", () => {
 
     const result = await bootstrap({
       modules: [
-        createChannelBasicStub({ wait: immediateWait }),
+        createFixtureChannelModule(fixture),
         createSubtitleMultilangStub({ wait: immediateWait }),
       ],
     });
@@ -54,6 +52,11 @@ describe("Luftballons panel UI", () => {
     );
     expect(meta.some((t) => t.includes("available"))).toBe(true);
     expect(meta.some((t) => t.includes("youtube.channel.basic"))).toBe(true);
+
+    const startLabels = [
+      ...(shadow?.querySelectorAll(".lb-module .lb-btn") ?? []),
+    ].map((el) => el.textContent ?? "");
+    expect(startLabels.some((t) => t.includes("采集频道数据"))).toBe(true);
   });
 
   it("shows unavailable on www.youtube.com", async () => {
@@ -67,7 +70,12 @@ describe("Luftballons panel UI", () => {
     });
 
     const result = await bootstrap({
-      modules: [createChannelBasicStub({ wait: immediateWait })],
+      modules: [
+        createSubtitleMultilangStub({
+          wait: immediateWait,
+          detectDocument: document,
+        }),
+      ],
     });
     panel = result.panel;
     panel.open();
@@ -83,7 +91,7 @@ describe("Luftballons panel UI", () => {
     fixture = mountStudioFixture({ layout: "NONE" });
 
     const result = await bootstrap({
-      modules: [createChannelBasicStub({ wait: immediateWait })],
+      modules: [createFixtureChannelModule(fixture)],
     });
     panel = result.panel;
     panel.open();

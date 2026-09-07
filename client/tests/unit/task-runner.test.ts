@@ -5,7 +5,7 @@ import {
   ModuleUnavailableError,
   TaskBusyError,
 } from "../../src/runtime/errors.js";
-import { createChannelBasicStub } from "../../src/modules/youtube-studio-stubs.js";
+import { createSubtitleMultilangStub } from "../../src/modules/youtube-studio-stubs.js";
 import { immediateWait } from "../../src/modules/step-control.js";
 import { createLogger } from "../../src/services/logger.js";
 import type { LuftballonsModule, TaskContext } from "../../src/runtime/types.js";
@@ -13,9 +13,32 @@ import {
   mountStudioFixture,
   type StudioFixtureHandle,
 } from "../fixtures/studio-simulated.js";
+import { createFixtureChannelModule } from "./channel-basic-test-utils.js";
+import { studioModuleAvailability } from "../../src/sites/youtube-studio/page-detector.js";
 
 function silentLogger() {
   return createLogger({ minLevel: "ERROR", sink: () => {} });
+}
+
+/** Lightweight stand-in when tests need controllable run() without DOM collection. */
+function fakeChannelModule(
+  run: LuftballonsModule["run"],
+  detectDocument?: Document,
+): LuftballonsModule {
+  return {
+    id: "youtube.channel.basic",
+    name: "YouTube Basic Channel Collector",
+    version: "0.1.0",
+    site: "youtube-studio",
+    capabilities: ["READ", "NAVIGATE", "LOCAL_EXPORT"],
+    detect: async (ctx) =>
+      studioModuleAvailability({
+        hostname: ctx.hostname,
+        href: ctx.href,
+        ...(detectDocument !== undefined ? { document: detectDocument } : {}),
+      }),
+    run,
+  };
 }
 
 function makeRunner(module: LuftballonsModule, hostname = "studio.youtube.com") {
@@ -49,13 +72,21 @@ describe("TaskRunner", () => {
 
   it("transitions IDLE→RUNNING→COMPLETED", async () => {
     fixture = mountStudioFixture({ layout: "2026_V1" });
-    const steps: string[] = [];
-    const runner = makeRunner(
-      createChannelBasicStub({
-        wait: async () => {},
-        onStep: (step) => steps.push(step),
-      }),
-    );
+    const { runner } = (() => {
+      const module = createFixtureChannelModule(fixture!);
+      const registry = new ModuleRegistry();
+      registry.register(module);
+      return {
+        runner: new TaskRunner({
+          registry,
+          logger: silentLogger(),
+          getLocation: () => ({
+            hostname: "studio.youtube.com",
+            href: fixture!.href,
+          }),
+        }),
+      };
+    })();
 
     const states: string[] = [];
     runner.subscribe((s) => states.push(s.state));
@@ -67,7 +98,6 @@ describe("TaskRunner", () => {
       expect(runner.getState(taskId)).toBe("COMPLETED");
     });
 
-    expect(steps.length).toBeGreaterThan(0);
     expect(states).toContain("RUNNING");
     expect(states.at(-1)).toBe("COMPLETED");
     expect(runner.getActiveTaskId()).toBeNull();
@@ -80,16 +110,13 @@ describe("TaskRunner", () => {
       release = resolve;
     });
 
-    const blocking: LuftballonsModule = {
-      ...createChannelBasicStub({ wait: immediateWait }),
-      run: async (ctx: TaskContext) => {
-        await gate;
-        if (ctx.signal.aborted) {
-          return { status: "CANCELLED", summary: "Cancelled" };
-        }
-        return { status: "COMPLETED", summary: "done" };
-      },
-    };
+    const blocking = fakeChannelModule(async (ctx: TaskContext) => {
+      await gate;
+      if (ctx.signal.aborted) {
+        return { status: "CANCELLED", summary: "Cancelled" };
+      }
+      return { status: "COMPLETED", summary: "done" };
+    }, document);
 
     const runner = makeRunner(blocking);
     const first = await runner.start("youtube.channel.basic");
@@ -118,19 +145,16 @@ describe("TaskRunner", () => {
       proceed = resolve;
     });
 
-    const module: LuftballonsModule = {
-      ...createChannelBasicStub({ wait: immediateWait }),
-      run: async (ctx) => {
-        seen.push("step-1");
-        await firstStep;
-        if (ctx.signal.aborted) {
-          seen.push("noticed-abort");
-          return { status: "CANCELLED", summary: "Cancelled by user" };
-        }
-        seen.push("step-2-should-not-run");
-        return { status: "COMPLETED", summary: "done" };
-      },
-    };
+    const module = fakeChannelModule(async (ctx) => {
+      seen.push("step-1");
+      await firstStep;
+      if (ctx.signal.aborted) {
+        seen.push("noticed-abort");
+        return { status: "CANCELLED", summary: "Cancelled by user" };
+      }
+      seen.push("step-2-should-not-run");
+      return { status: "COMPLETED", summary: "done" };
+    }, document);
 
     const runner = makeRunner(module);
     const taskId = await runner.start("youtube.channel.basic");
@@ -153,19 +177,17 @@ describe("TaskRunner", () => {
   it("maps module abort wait to CANCELLED via AbortSignal", async () => {
     fixture = mountStudioFixture({ layout: "2026_V1" });
     let signalRef: AbortSignal | undefined;
-    const module = createChannelBasicStub({
-      wait: (_ms, signal) => {
-        signalRef = signal;
-        return new Promise((_resolve, reject) => {
-          signal.addEventListener(
-            "abort",
-            () => reject(new DOMException("Aborted", "AbortError")),
-            { once: true },
-          );
-        });
-      },
-      stepDelayMs: 1,
-    });
+    const module = fakeChannelModule(async (ctx) => {
+      signalRef = ctx.signal;
+      await new Promise<void>((_resolve, reject) => {
+        ctx.signal.addEventListener(
+          "abort",
+          () => reject(new DOMException("Aborted", "AbortError")),
+          { once: true },
+        );
+      });
+      return { status: "COMPLETED", summary: "unreachable" };
+    }, document);
 
     const runner = makeRunner(module);
     const taskId = await runner.start("youtube.channel.basic");
@@ -180,7 +202,10 @@ describe("TaskRunner", () => {
 
   it("refuses unavailable modules on wrong site", async () => {
     const runner = makeRunner(
-      createChannelBasicStub({ wait: immediateWait }),
+      fakeChannelModule(async () => ({
+        status: "COMPLETED",
+        summary: "nope",
+      })),
       "www.youtube.com",
     );
     await expect(runner.start("youtube.channel.basic")).rejects.toBeInstanceOf(
@@ -190,7 +215,9 @@ describe("TaskRunner", () => {
 
   it("refuses modules when layout is UNKNOWN", async () => {
     fixture = mountStudioFixture({ layout: "NONE" });
-    const runner = makeRunner(createChannelBasicStub({ wait: immediateWait }));
+    const runner = makeRunner(
+      createFixtureChannelModule(fixture),
+    );
     await expect(runner.start("youtube.channel.basic")).rejects.toBeInstanceOf(
       ModuleUnavailableError,
     );
@@ -198,16 +225,36 @@ describe("TaskRunner", () => {
 
   it("transitions to FAILED when run throws", async () => {
     fixture = mountStudioFixture({ layout: "2026_V1" });
-    const module: LuftballonsModule = {
-      ...createChannelBasicStub({ wait: immediateWait }),
-      run: async () => {
-        throw new Error("boom");
-      },
-    };
+    const module = fakeChannelModule(async () => {
+      throw new Error("boom");
+    }, document);
     const runner = makeRunner(module);
     const taskId = await runner.start("youtube.channel.basic");
     await vi.waitFor(() => {
       expect(runner.getState(taskId)).toBe("FAILED");
     });
+  });
+
+  it("subtitle stub still registers and completes (channel stub removed)", async () => {
+    fixture = mountStudioFixture({ layout: "2026_V1" });
+    const runner = makeRunner(
+      createSubtitleMultilangStub({ wait: immediateWait }),
+    );
+    // Wrong module id for makeRunner registration — register properly:
+    const registry = new ModuleRegistry();
+    registry.register(createSubtitleMultilangStub({ wait: immediateWait }));
+    const subRunner = new TaskRunner({
+      registry,
+      logger: silentLogger(),
+      getLocation: () => ({
+        hostname: "studio.youtube.com",
+        href: fixture!.href,
+      }),
+    });
+    const taskId = await subRunner.start("youtube.subtitle.multilang");
+    await vi.waitFor(() => {
+      expect(subRunner.getState(taskId)).toBe("COMPLETED");
+    });
+    void runner;
   });
 });
