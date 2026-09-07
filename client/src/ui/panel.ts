@@ -1,11 +1,21 @@
 import type { Runtime } from "../runtime/runtime.js";
 import type {
+  LuftballonsModule,
   ModuleAvailability,
   TaskSnapshot,
 } from "../runtime/types.js";
 import { TaskBusyError } from "../runtime/errors.js";
 import { PANEL_STYLES } from "./styles.js";
 import { createCollectionsSection } from "./collections-section.js";
+import type { PanelHumanGate } from "./human-gate.js";
+import {
+  isSubtitleControls,
+  type SubtitleMultilangModule,
+} from "../sites/youtube-studio/modules/subtitle-multilang/module.js";
+import {
+  PRESET_SUBTITLE_LANGUAGES,
+  resolveLanguage,
+} from "../sites/youtube-studio/modules/subtitle-multilang/schema.js";
 
 export interface PanelHandle {
   destroy(): void;
@@ -13,10 +23,16 @@ export interface PanelHandle {
   close(): void;
 }
 
+export interface MountPanelOptions {
+  /** Real Human Gate; attached into this panel's shadow DOM. */
+  humanGate?: PanelHumanGate;
+}
+
 interface ModuleRow {
   id: string;
   name: string;
   availability: ModuleAvailability;
+  module: LuftballonsModule;
 }
 
 function text(el: HTMLElement, value: string): void {
@@ -26,6 +42,7 @@ function text(el: HTMLElement, value: string): void {
 export async function mountLuftballonsPanel(
   runtime: Runtime,
   mountParent: ParentNode = document.documentElement,
+  options: MountPanelOptions = {},
 ): Promise<PanelHandle> {
   const host = document.createElement("div");
   host.setAttribute("data-luftballons-root", "true");
@@ -96,6 +113,8 @@ export async function mountLuftballonsPanel(
   shadow.appendChild(root);
   mountParent.appendChild(host);
 
+  options.humanGate?.attach(panel);
+
   let open = false;
   let activeTaskId: string | null = null;
   let rows: ModuleRow[] = [];
@@ -120,7 +139,9 @@ export async function mountLuftballonsPanel(
         `State: ${snapshot.state}`,
         progress ? `Progress: ${progress}` : "",
         snapshot.result ? `Result: ${snapshot.result.summary}` : "",
-        ...(snapshot.result?.warnings?.map(w => `Warning [${w.code}]: ${w.message}`) ?? []),
+        ...(snapshot.result?.warnings?.map(
+          (w) => `Warning [${w.code}]: ${w.message}`,
+        ) ?? []),
       ]
         .filter(Boolean)
         .join("\n"),
@@ -141,6 +162,64 @@ export async function mountLuftballonsPanel(
     return (
       state === "RUNNING" || state === "WAITING" || state === "WAITING_HUMAN"
     );
+  };
+
+  const applySubtitleSelection = (mod: SubtitleMultilangModule, block: HTMLElement): void => {
+    const checked = [
+      ...block.querySelectorAll<HTMLInputElement>(
+        'input[data-lb-lang]:checked',
+      ),
+    ].map((input) => resolveLanguage(input.value, input.getAttribute("data-lb-label") ?? undefined));
+
+    const customCode = block.querySelector<HTMLInputElement>(
+      'input[data-lb-custom-code]',
+    )?.value.trim();
+    const customLabel = block.querySelector<HTMLInputElement>(
+      'input[data-lb-custom-label]',
+    )?.value.trim();
+    if (customCode) {
+      checked.push(resolveLanguage(customCode, customLabel || undefined));
+    }
+    mod.setTargetLanguages(checked);
+  };
+
+  const renderSubtitleLanguagePicker = (
+    block: HTMLElement,
+    mod: SubtitleMultilangModule,
+  ): void => {
+    const selected = new Set(
+      mod.getTargetLanguages().map((l) => l.code.toLowerCase()),
+    );
+
+    const list = document.createElement("div");
+    list.className = "lb-lang-list";
+
+    for (const lang of PRESET_SUBTITLE_LANGUAGES) {
+      const row = document.createElement("label");
+      row.className = "lb-lang-row";
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.setAttribute("data-lb-lang", "true");
+      cb.setAttribute("data-lb-label", lang.label);
+      cb.value = lang.code;
+      cb.checked = selected.has(lang.code.toLowerCase());
+      const label = document.createElement("span");
+      text(label, `${lang.label} (${lang.code})`);
+      row.append(cb, label);
+      list.append(row);
+    }
+
+    const custom = document.createElement("div");
+    custom.className = "lb-lang-custom";
+    const codeInput = document.createElement("input");
+    codeInput.setAttribute("data-lb-custom-code", "true");
+    codeInput.placeholder = "code";
+    const labelInput = document.createElement("input");
+    labelInput.setAttribute("data-lb-custom-label", "true");
+    labelInput.placeholder = "label";
+    custom.append(codeInput, labelInput);
+
+    block.append(list, custom);
   };
 
   const renderModules = (): void => {
@@ -164,6 +243,12 @@ export async function mountLuftballonsPanel(
           : `unavailable (${row.availability.reason ?? "unknown"}) · ${row.id}`,
       );
 
+      block.append(nameEl, meta);
+
+      if (isSubtitleControls(row.module)) {
+        renderSubtitleLanguagePicker(block, row.module);
+      }
+
       const startBtn = document.createElement("button");
       startBtn.type = "button";
       startBtn.className = "lb-btn";
@@ -171,13 +256,18 @@ export async function mountLuftballonsPanel(
         startBtn,
         row.id === "youtube.channel.basic"
           ? "采集频道数据"
-          : "Start (simulated)",
+          : row.id === "youtube.subtitle.multilang"
+            ? "添加多语言字幕"
+            : "Start",
       );
       startBtn.disabled = !row.availability.available || isBusy();
       startBtn.addEventListener("click", () => {
         void (async () => {
           setError("");
           try {
+            if (isSubtitleControls(row.module)) {
+              applySubtitleSelection(row.module, block);
+            }
             const taskId = await runtime.taskRunner.start(row.id);
             activeTaskId = taskId;
             renderModules();
@@ -193,7 +283,7 @@ export async function mountLuftballonsPanel(
         })();
       });
 
-      block.append(nameEl, meta, startBtn);
+      block.append(startBtn);
       modulesBox.appendChild(block);
     }
   };
@@ -215,6 +305,7 @@ export async function mountLuftballonsPanel(
       id: entry.module.id,
       name: entry.module.name,
       availability: entry.availability,
+      module: entry.module,
     }));
     renderModules();
   };
@@ -271,6 +362,7 @@ export async function mountLuftballonsPanel(
     },
     destroy(): void {
       unsubscribe();
+      options.humanGate?.detach();
       host.remove();
     },
   };
