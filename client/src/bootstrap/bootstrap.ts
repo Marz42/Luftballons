@@ -9,6 +9,9 @@ import {
 } from "../services/dom-service.js";
 import { CsvSink } from "../sinks/csv-sink.js";
 import { JsonSink } from "../sinks/json-sink.js";
+import { RemoteSink } from "../sinks/remote-sink.js";
+import { createNetworkService } from "../services/network-service.js";
+import type { NetworkService } from "../services/network-service.js";
 import { createChannelBasicModule } from "../sites/youtube-studio/modules/channel-basic/module.js";
 import { createSubtitleMultilangModule } from "../sites/youtube-studio/modules/subtitle-multilang/module.js";
 import { detectStudio } from "../sites/youtube-studio/page-detector.js";
@@ -52,6 +55,8 @@ export interface BootstrapOptions {
   collections?: CollectionService;
   csvSink?: Sink;
   jsonSink?: Sink;
+  remoteSink?: Sink;
+  network?: NetworkService;
   /** Skip creating Dom/Navigation services (rare). */
   studioAdapter?: false | StudioAdapter;
   /** Override Human Gate (tests inject fakes). */
@@ -126,6 +131,21 @@ export async function bootstrap(
   const csvSink = options.csvSink ?? new CsvSink();
   const jsonSink = options.jsonSink ?? new JsonSink();
 
+  // Human-triggered only — bootstrap never auto-fetches (SPEC §3.2).
+  const network =
+    options.network ??
+    createNetworkService({
+      logger,
+      runtimeVersion: BUNDLED_DEFAULTS.runtimeVersion,
+    });
+  const remoteSink =
+    options.remoteSink ??
+    new RemoteSink({
+      getBaseUrl: () => network.getSettings().baseUrl,
+      getToken: () => network.getSettings().token,
+      isSendAllowed: () => network.getNetworkMode() !== "OFF",
+    });
+
   const humanGate = options.humanGate ?? createPanelHumanGate();
 
   const taskRunner = new TaskRunner({
@@ -143,6 +163,8 @@ export async function bootstrap(
     collections,
     csvSink,
     jsonSink,
+    remoteSink,
+    network,
   });
 
   let panel: PanelHandle;

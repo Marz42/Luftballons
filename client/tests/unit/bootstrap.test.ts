@@ -24,7 +24,10 @@ describe("bootstrap", () => {
       mount: false,
     });
     expect(runtime.version).toBe("0.1.0");
-    expect(runtime.config.networkMode).toBe("OFF");
+    expect(runtime.config.networkMode).toBe("MANUAL");
+    expect(runtime.network).toBeDefined();
+    expect(runtime.remoteSink?.id).toBe("remote");
+    expect(runtime.remoteSink?.capability).toBe("NETWORK_SEND");
     expect(runtime.registry.list()).toHaveLength(1);
     panel.destroy();
   });

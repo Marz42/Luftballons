@@ -69,6 +69,16 @@ export function getOrCreateInstallation(
   return identity;
 }
 
+/**
+ * Persist installation identity (e.g. after server register replaces local UUID).
+ */
+export function setInstallation(
+  identity: InstallationIdentity,
+  storage: Pick<Storage, "setItem"> = localStorage,
+): void {
+  storage.setItem(STORAGE_KEY, JSON.stringify(identity));
+}
+
 /** Test helper — clear persisted installation. */
 export function clearInstallation(
   storage: Pick<Storage, "removeItem"> = localStorage,

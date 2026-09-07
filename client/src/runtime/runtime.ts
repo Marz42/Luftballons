@@ -3,6 +3,7 @@ import type { TaskRunner } from "./task-runner.js";
 import type { Logger } from "./types.js";
 import type { CollectionService } from "../services/collection-service.js";
 import { NoopCollectionService } from "../services/collection-service.js";
+import type { NetworkService } from "../services/network-service.js";
 import type { Sink } from "../sinks/sink.js";
 import { CsvSink } from "../sinks/csv-sink.js";
 import { JsonSink } from "../sinks/json-sink.js";
@@ -14,7 +15,8 @@ export interface BundledDefaults {
 
 export const BUNDLED_DEFAULTS: BundledDefaults = {
   runtimeVersion: "0.1.0",
-  networkMode: "OFF",
+  /** IMPLEMENTATION §22 — MANUAL default; actual mode persisted in localStorage. */
+  networkMode: "MANUAL",
 };
 
 export interface Runtime {
@@ -26,6 +28,8 @@ export interface Runtime {
   readonly collections: CollectionService;
   readonly csvSink: Sink;
   readonly jsonSink: Sink;
+  readonly remoteSink?: Sink;
+  readonly network?: NetworkService;
 }
 
 export function createRuntime(options: {
@@ -36,6 +40,8 @@ export function createRuntime(options: {
   collections?: CollectionService;
   csvSink?: Sink;
   jsonSink?: Sink;
+  remoteSink?: Sink;
+  network?: NetworkService;
 }): Runtime {
   const config = options.config ?? BUNDLED_DEFAULTS;
   return {
@@ -47,5 +53,9 @@ export function createRuntime(options: {
     collections: options.collections ?? new NoopCollectionService(),
     csvSink: options.csvSink ?? new CsvSink(),
     jsonSink: options.jsonSink ?? new JsonSink(),
+    ...(options.remoteSink !== undefined
+      ? { remoteSink: options.remoteSink }
+      : {}),
+    ...(options.network !== undefined ? { network: options.network } : {}),
   };
 }
