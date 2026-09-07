@@ -166,7 +166,12 @@ export async function mountLuftballonsPanel(
       const startBtn = document.createElement("button");
       startBtn.type = "button";
       startBtn.className = "lb-btn";
-      text(startBtn, "Start (simulated)");
+      text(
+        startBtn,
+        row.id === "youtube.channel.basic"
+          ? "采集频道数据"
+          : "Start (simulated)",
+      );
       startBtn.disabled = !row.availability.available || isBusy();
       startBtn.addEventListener("click", () => {
         void (async () => {

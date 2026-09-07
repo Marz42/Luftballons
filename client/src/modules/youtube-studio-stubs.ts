@@ -6,13 +6,6 @@ import type {
   TaskContext,
   TaskResult,
 } from "../runtime/types.js";
-import type { Collection } from "../schemas/collection.js";
-import type { ChannelBasicData } from "../schemas/channel-basic.js";
-import { getOrCreateInstallation } from "../schemas/installation.js";
-import {
-  createMockChannelBasicData,
-  LUFTBALLONS_SCHEMA_VERSION,
-} from "../services/collection-service.js";
 import {
   abortableDelay,
   waitForAbortableStep,
@@ -32,16 +25,6 @@ export interface StubModuleOptions {
   detectDocument?: Document;
 }
 
-export interface ChannelBasicStubOptions extends StubModuleOptions {
-  /** Injected / mock channel payload (simulates page read). */
-  mockData?: ChannelBasicData;
-  /** Collection completeness — drives TaskResult status. */
-  collectionStatus?: "COMPLETE" | "PARTIAL";
-  installationId?: string;
-  collectionId?: string;
-  collectorVersion?: number;
-}
-
 function detectStudioSite(
   ctx: DetectContext,
   detectDocument?: Document,
@@ -58,13 +41,6 @@ function isAbortError(error: unknown): boolean {
     (error instanceof DOMException && error.name === "AbortError") ||
     (error instanceof Error && error.name === "AbortError")
   );
-}
-
-function newId(prefix: string): string {
-  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
-    return crypto.randomUUID();
-  }
-  return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
 async function runSimulatedSteps(
@@ -86,68 +62,6 @@ async function runSimulatedSteps(
   return "OK";
 }
 
-const CHANNEL_CAPS: Capability[] = ["READ", "NAVIGATE", "LOCAL_EXPORT"];
-
-export function createChannelBasicStub(
-  options: ChannelBasicStubOptions = {},
-): LuftballonsModule {
-  return {
-    id: "youtube.channel.basic",
-    name: "YouTube Basic Channel Collector (stub)",
-    version: "0.1.0",
-    site: "youtube-studio",
-    capabilities: CHANNEL_CAPS,
-    detect: async (ctx) => detectStudioSite(ctx, options.detectDocument),
-    run: async (ctx): Promise<TaskResult> => {
-      try {
-        const stepResult = await runSimulatedSteps(
-          ctx,
-          [
-            "Detect Studio",
-            "Verify channel",
-            "Read channel summary (simulated)",
-            "Read recent videos (simulated)",
-            "Normalize (simulated)",
-          ],
-          options,
-        );
-        if (stepResult === "CANCELLED") {
-          return { status: "CANCELLED", summary: "Cancelled by user" };
-        }
-
-        const installationId =
-          options.installationId ??
-          getOrCreateInstallation().installationId;
-        const data = options.mockData ?? createMockChannelBasicData();
-        const status = options.collectionStatus ?? "COMPLETE";
-        const collection: Collection<ChannelBasicData> = {
-          collectionId: options.collectionId ?? newId("col"),
-          installationId,
-          collector: "youtube.channel.basic",
-          collectorVersion: options.collectorVersion ?? 1,
-          schemaVersion: LUFTBALLONS_SCHEMA_VERSION,
-          capturedAt: new Date().toISOString(),
-          status,
-          data,
-        };
-
-        await ctx.collections.save(collection);
-
-        return {
-          status: status === "PARTIAL" ? "PARTIAL" : "COMPLETED",
-          summary: `Saved channel collection (${data.recentVideos.length} videos)`,
-          collectionIds: [collection.collectionId],
-        };
-      } catch (error) {
-        if (ctx.signal.aborted || isAbortError(error)) {
-          return { status: "CANCELLED", summary: "Cancelled by user" };
-        }
-        throw error;
-      }
-    },
-  };
-}
-
 const SUBTITLE_CAPS: Capability[] = [
   "READ",
   "NAVIGATE",
@@ -155,6 +69,7 @@ const SUBTITLE_CAPS: Capability[] = [
   "WRITE_COMMIT",
 ];
 
+/** Phase 4 placeholder — channel.basic stub removed in Phase 3 (FT-009). */
 export function createSubtitleMultilangStub(
   options: StubModuleOptions = {},
 ): LuftballonsModule {

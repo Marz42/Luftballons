@@ -275,7 +275,7 @@ export class IndexedDbCollectionService implements CollectionService {
   }
 }
 
-/** Default mock ChannelBasicData for stub collectors / tests. */
+/** Default mock ChannelBasicData for tests / fixtures. */
 export function createMockChannelBasicData(
   overrides: Partial<ChannelBasicData> = {},
 ): ChannelBasicData {

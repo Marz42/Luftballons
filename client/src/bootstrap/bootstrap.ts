@@ -9,10 +9,8 @@ import {
 } from "../services/dom-service.js";
 import { CsvSink } from "../sinks/csv-sink.js";
 import { JsonSink } from "../sinks/json-sink.js";
-import {
-  createChannelBasicStub,
-  createSubtitleMultilangStub,
-} from "../modules/youtube-studio-stubs.js";
+import { createSubtitleMultilangStub } from "../modules/youtube-studio-stubs.js";
+import { createChannelBasicModule } from "../sites/youtube-studio/modules/channel-basic/module.js";
 import { detectStudio } from "../sites/youtube-studio/page-detector.js";
 import {
   createNavigationService,
@@ -26,8 +24,9 @@ import type { CollectionService } from "../services/collection-service.js";
 import type { Sink } from "../sinks/sink.js";
 
 /**
- * Phase 2 Studio adapter handles — optional on the bootstrap container.
- * Not injected into TaskContext until Phase 3 (keeps P0/P1 TaskContext stable).
+ * Phase 2+ Studio adapter handles.
+ * Dom/Navigation are closed over by site modules at registration (wiring in bootstrap).
+ * Core TaskContext stays free of site-specific NavigationService imports (AGENTS.md).
  */
 export interface StudioAdapter {
   detect: typeof detectStudio;
@@ -53,6 +52,25 @@ export interface BootstrapOptions {
   studioAdapter?: false | StudioAdapter;
 }
 
+function defaultStudioAdapter(): StudioAdapter {
+  const dom = createDomService();
+  return {
+    detect: detectStudio,
+    dom,
+    navigation: createNavigationService({ dom }),
+  };
+}
+
+function defaultModules(adapter: StudioAdapter): LuftballonsModule[] {
+  return [
+    createChannelBasicModule({
+      dom: adapter.dom,
+      navigation: adapter.navigation,
+    }),
+    createSubtitleMultilangStub(),
+  ];
+}
+
 /**
  * Bootstrap (SPEC §6): init Runtime → check host → register modules →
  * load bundled defaults → render UI. No eval, no remote JS.
@@ -69,10 +87,21 @@ export async function bootstrap(
     runtimeVersion: BUNDLED_DEFAULTS.runtimeVersion,
   });
 
+  let studioAdapter: StudioAdapter | undefined;
+  if (options.studioAdapter === false) {
+    studioAdapter = undefined;
+  } else if (options.studioAdapter) {
+    studioAdapter = options.studioAdapter;
+  } else {
+    studioAdapter = defaultStudioAdapter();
+  }
+
   const registry = new ModuleRegistry();
   const modules =
     options.modules ??
-    [createChannelBasicStub(), createSubtitleMultilangStub()];
+    (studioAdapter
+      ? defaultModules(studioAdapter)
+      : [createSubtitleMultilangStub()]);
 
   for (const module of modules) {
     registry.register(module);
@@ -98,20 +127,6 @@ export async function bootstrap(
     csvSink,
     jsonSink,
   });
-
-  let studioAdapter: StudioAdapter | undefined;
-  if (options.studioAdapter === false) {
-    studioAdapter = undefined;
-  } else if (options.studioAdapter) {
-    studioAdapter = options.studioAdapter;
-  } else {
-    const dom = createDomService();
-    studioAdapter = {
-      detect: detectStudio,
-      dom,
-      navigation: createNavigationService({ dom }),
-    };
-  }
 
   let panel: PanelHandle;
   if (options.mount === false) {
