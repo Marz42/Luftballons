@@ -241,3 +241,12 @@ None / …
 ```
 
 Until this report lands, keep all `assumption, calibrate on real device` comments. Do not claim live verification.
+
+
+## 2026-09-08 review follow-up
+
+- An empty container is not evidence of an empty language list. Wait up to two seconds for rows or an explicit empty-state signal; otherwise stop before adding. The current data-subtitle-list-state=EMPTY marker is a fixture assumption requiring real DOM calibration. Do not inject the marker into Studio to bypass this gate.
+- An unrecoverable language-add timeout/UI error terminates the whole workflow before Human Gate, even if earlier languages remain pending. No automatic rollback or publication occurs.
+- Recheck site, video and known layout before writes, including after picker waits; detached/inactive editor and option nodes are rejected.
+- Confirm added rows only within the editor's language list and require pending/published state. Picker options cannot prove an add succeeded.
+- Regression cases include rows arriving after 800 ms, unknown empty container, first-language success followed by failure, layout loss during approval, video switch during picker wait, and no-op option selection. These are synthetic tests, not live subtitle DOM evidence.

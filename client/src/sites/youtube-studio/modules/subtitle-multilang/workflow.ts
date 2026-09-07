@@ -108,7 +108,7 @@ export function recheckVideoBinding(
 
   const doc = deps.detectDocument ?? document;
   const detection = detectStudio({ href, document: doc });
-  if (detection.page !== "SUBTITLES") {
+  if (detection.layout === "UNKNOWN" || detection.page !== "SUBTITLES") {
     return {
       ok: false,
       code: "NAV_BINDING_FAILED",
@@ -285,15 +285,22 @@ export async function readExistingLanguages(
   return rows.map((r) => r.code);
 }
 
+async function hasConfirmedEmptyList(dom: CancellableDomService): Promise<boolean> {
+  const list = await dom.find(getSubtitleTarget("subtitle.languages.list"));
+  // Assumption marker until a real Studio empty-state signal is calibrated.
+  return list?.getAttribute("data-subtitle-list-state") === "EMPTY" &&
+    list.getAttribute("aria-busy") !== "true";
+}
+
 async function waitForLanguageListSettled(
   dom: CancellableDomService,
   signal: AbortSignal,
-  /** Max wait while list is EMPTY (rows may still be loading). */
-  emptySettleMs = 400,
+  /** Maximum wait for rows or explicit empty evidence; elapsed time is not evidence. */
+  emptySettleMs = 2_000,
 ): Promise<LanguageListParseResult | { kind: "MISSING" }> {
   throwIfAborted(signal);
   const first = await parseLanguageList(dom);
-  if (first.kind !== "EMPTY") {
+  if (first.kind !== "EMPTY" || await hasConfirmedEmptyList(dom)) {
     return first;
   }
 
@@ -302,7 +309,7 @@ async function waitForLanguageListSettled(
   while (Date.now() <= deadline) {
     throwIfAborted(signal);
     await new Promise<void>((resolve, reject) => {
-      const t = window.setTimeout(resolve, 20);
+      const t = window.setTimeout(() => { signal.removeEventListener("abort", onAbort); resolve(); }, 20);
       const onAbort = (): void => {
         window.clearTimeout(t);
         reject(new DOMException("Aborted", "AbortError"));
@@ -310,12 +317,11 @@ async function waitForLanguageListSettled(
       signal.addEventListener("abort", onAbort, { once: true });
     });
     last = await parseLanguageList(dom);
-    if (last.kind !== "EMPTY") {
+    if (last.kind !== "EMPTY" || await hasConfirmedEmptyList(dom)) {
       return last;
     }
   }
-  // Confirmed empty after settle window — safe to treat as vacuum.
-  return last.kind === "EMPTY" ? last : last;
+  return { kind: "UNPARSEABLE", rows: [], detail: "Language list never confirmed loading complete/empty" };
 }
 
 async function waitForPublishedRow(
@@ -428,8 +434,10 @@ async function addLanguage(
   dom: CancellableDomService,
   lang: SubtitleLanguage,
   signal: AbortSignal,
+  assertBinding: () => void,
 ): Promise<void> {
   throwIfAborted(signal);
+  assertBinding();
   const editor = await requireEditor(dom);
   const editorDom = scopedDom(editor);
 
@@ -439,6 +447,8 @@ async function addLanguage(
       `Add-language control missing inside editor (assumption target "${addBtn.id}")`,
     );
   }
+  assertBinding();
+  if (!editor.isConnected || !isActiveElement(editor)) throw new UiMismatchError("Editor detached or inactive");
   await editorDom.click(addBtn);
   throwIfAborted(signal);
 
@@ -470,6 +480,9 @@ async function addLanguage(
     );
   }
 
+  throwIfAborted(signal);
+  assertBinding();
+  if (!editor.isConnected || !picker.isConnected || !found.isConnected || !isActiveElement(found)) throw new UiMismatchError("Picker/option no longer active");
   if (found instanceof HTMLElement) {
     found.click();
   } else {
@@ -479,18 +492,20 @@ async function addLanguage(
   }
   throwIfAborted(signal);
 
-  // Wait: add result — pending or published row appears in list
+  // Wait: add result — pending or published row appears in the language list only.
   const pendingTarget: DomTarget = {
     id: `subtitle.language.row.${lang.code}`,
     selectorFallback: [
       `[data-luftballons-subtitle-lang="${lang.code}"]`,
       `[data-language-code="${lang.code}"]`,
     ],
-    matches: isActiveElement,
+    matches: el => isActiveElement(el) && ["PENDING_PUBLISH", "PUBLISHED"].includes(rowStateFromElement(el)),
     unique: true,
   };
   try {
-    await editorDom.waitFor(pendingTarget, 2_000, signal);
+    const list = await editorDom.find(getSubtitleTarget("subtitle.languages.list"));
+    if (!list) throw new UiMismatchError("Language list missing inside editor");
+    await scopedDom(list).waitFor(pendingTarget, 2_000, signal);
   } catch (error) {
     if (isAbortError(error) || signal.aborted) {
       throw error;
@@ -508,6 +523,7 @@ async function publishSubtitles(
   dom: CancellableDomService,
   deps: SubtitleWorkflowDeps,
   signal: AbortSignal,
+  assertBinding: () => void,
 ): Promise<void> {
   throwIfAborted(signal);
   const editor = await requireEditor(dom);
@@ -518,6 +534,8 @@ async function publishSubtitles(
       `Publish control missing inside editor (assumption target "${publish.id}")`,
     );
   }
+  assertBinding();
+  if (!editor.isConnected || !isActiveElement(editor)) throw new UiMismatchError("Editor detached or inactive");
   deps.onPublishAttempt?.();
   await editorDom.click(publish);
 }
@@ -624,6 +642,11 @@ export async function runSubtitleMultilangWorkflow(
       ],
     };
   }
+
+  const assertBinding = (): void => {
+    const check = recheckVideoBinding(deps, videoId);
+    if (!check.ok) throw new UiMismatchError(check.message);
+  };
 
   // 2) navigate to subtitles (video-scoped target via NavigationService)
   ctx.setProgress("Opening subtitles…", "RUNNING");
@@ -752,7 +775,7 @@ export async function runSubtitleMultilangWorkflow(
         return bindingFailureResult(videoId, beforeAdd, warnings, outcomes);
       }
       try {
-        await addLanguage(deps.dom, lang, ctx.signal);
+        await addLanguage(deps.dom, lang, ctx.signal, assertBinding);
         outcomes.push({
           code: lang.code,
           label: lang.label,
@@ -794,7 +817,11 @@ export async function runSubtitleMultilangWorkflow(
               detail: "Stopped after prior language wait/UI failure",
             });
           }
-          break;
+          return {
+            status: "FAILED",
+            summary: `Subtitle workflow stopped before publish; pending changes retained. ${formatOutcomesSummary(outcomes)}`,
+            warnings,
+          };
         }
       }
     }
@@ -866,7 +893,7 @@ export async function runSubtitleMultilangWorkflow(
 
   ctx.setProgress("Publishing…", "RUNNING");
   try {
-    await publishSubtitles(deps.dom, deps, ctx.signal);
+    await publishSubtitles(deps.dom, deps, ctx.signal, assertBinding);
   } catch (error) {
     if (isAbortError(error) || ctx.signal.aborted) {
       throw error;

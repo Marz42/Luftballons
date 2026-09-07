@@ -696,7 +696,7 @@ describe("youtube.subtitle.multilang (FT-011 / P4-T1…T5)", () => {
           { code: "en", label: "English" },
           { code: "ja", label: "日本語" },
         ],
-        languagesListRowsDelayMs: 80,
+        languagesListRowsDelayMs: 800,
       },
     });
     const mod = createFixtureSubtitleModule(fixture, {
@@ -714,5 +714,84 @@ describe("youtube.subtitle.multilang (FT-011 / P4-T1…T5)", () => {
     expect(summary).toMatch(/English\(en\) (SKIPPED|EXISTS)/);
     expect(summary).toMatch(/日本語\(ja\) SUCCESS/);
     expect(fixture.clickCounts.option).toBe(1);
+  });
+
+  it("does not infer empty from a timeout", async () => {
+    fixture = mountStudioFixture({ page: "VIDEO_DETAILS", subtitles: {
+      existingLanguages: [], omitEmptyState: true,
+    }});
+    const gate = createDeferredHumanGate();
+    const runner = makeRunner(createFixtureSubtitleModule(fixture), gate);
+    const id = await runner.start("youtube.subtitle.multilang");
+    await vi.waitFor(() => expect(runner.getState(id)).toBe("FAILED"), { timeout: 4000 });
+    expect(fixture.clickCounts.addLanguage).toBe(0);
+    expect(gate.lastAction).toBeNull();
+    expect(fixture.clickCounts.publish).toBe(0);
+  });
+
+  it("stops before gate after a later language fails", async () => {
+    fixture = mountStudioFixture({ page: "VIDEO_DETAILS", subtitles: {
+      existingLanguages: [], pickerLanguages: [{ code: "en", label: "English" }],
+    }});
+    const gate = createDeferredHumanGate();
+    const runner = makeRunner(createFixtureSubtitleModule(fixture, {
+      initialLanguages: [{ code: "en", label: "English" }, { code: "ja", label: "日本語" }],
+    }), gate);
+    const id = await runner.start("youtube.subtitle.multilang");
+    await vi.waitFor(() => expect(runner.getState(id)).toBe("FAILED"), { timeout: 4000 });
+    expect(gate.lastAction).toBeNull();
+    expect(fixture.clickCounts.publish).toBe(0);
+  });
+
+  it("rejects unknown layout after approval", async () => {
+    fixture = mountStudioFixture({ page: "VIDEO_DETAILS", subtitles: {
+      existingLanguages: [], pickerLanguages: [{ code: "ja", label: "日本語" }],
+    }});
+    const gate = createDeferredHumanGate();
+    const runner = makeRunner(createFixtureSubtitleModule(fixture, {
+      initialLanguages: [{ code: "ja", label: "日本語" }],
+    }), gate);
+    const id = await runner.start("youtube.subtitle.multilang");
+    await vi.waitFor(() => expect(runner.getState(id)).toBe("WAITING_HUMAN"));
+    document.querySelector("ytcp-navigation-drawer")!.remove();
+    gate.resolve("APPROVED");
+    await vi.waitFor(() => expect(runner.getState(id)).toBe("FAILED"));
+    expect(fixture.clickCounts.publish).toBe(0);
+  });
+
+  it("rechecks video after the picker wait before selecting", async () => {
+    fixture = mountStudioFixture({ page: "VIDEO_DETAILS", subtitles: {
+      existingLanguages: [], pickerLanguages: [{ code: "ja", label: "日本語" }], pickerOpenDelayMs: 200,
+    }});
+    const runner = makeRunner(createFixtureSubtitleModule(fixture, {
+      initialLanguages: [{ code: "ja", label: "日本語" }],
+    }));
+    const id = await runner.start("youtube.subtitle.multilang");
+    await vi.waitFor(() => expect(fixture!.clickCounts.addLanguage).toBe(1));
+    fixture.setHref("https://studio.youtube.com/video/other_video/translations");
+    await vi.waitFor(() => expect(runner.getState(id)).toBe("FAILED"));
+    expect(fixture.clickCounts.option).toBe(0);
+    expect(fixture.clickCounts.publish).toBe(0);
+  });
+
+  it("does not accept a picker option as an added row", async () => {
+    fixture = mountStudioFixture({ page: "VIDEO_DETAILS", subtitles: {
+      existingLanguages: [], pickerLanguages: [{ code: "ja", label: "日本語" }], pickerOpenDelayMs: 200,
+    }});
+    const gate = createDeferredHumanGate();
+    const runner = makeRunner(createFixtureSubtitleModule(fixture, {
+      initialLanguages: [{ code: "ja", label: "日本語" }],
+    }), gate);
+    const id = await runner.start("youtube.subtitle.multilang");
+    await vi.waitFor(() => expect(fixture!.clickCounts.addLanguage).toBe(1));
+    const option = document.querySelector("[data-luftballons-subtitle-option]")!;
+    const inert = option.cloneNode(true) as HTMLElement;
+    option.replaceWith(inert);
+    inert.addEventListener("click", () => {
+      setTimeout(() => { (inert.parentElement as HTMLElement).hidden = true; }, 50);
+    });
+    await vi.waitFor(() => expect(runner.getState(id)).toBe("FAILED"), { timeout: 4000 });
+    expect(gate.lastAction).toBeNull();
+    expect(fixture.clickCounts.publish).toBe(0);
   });
 });

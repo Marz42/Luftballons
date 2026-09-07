@@ -120,6 +120,8 @@ export interface SubtitleFixtureData {
   pickerLanguages?: Array<{ code: string; label: string }>;
   /** When true, omit the languages list container (P4-T4 UI mismatch). */
   omitLanguagesList?: boolean;
+  /** Empty container without a confirmed empty-state signal. */
+  omitEmptyState?: boolean;
   /** When true, omit add / publish controls. */
   omitControls?: boolean;
   /**
@@ -422,6 +424,9 @@ function appendSubtitlesBody(
   list.setAttribute("aria-label", "Subtitle languages");
 
   const renderItems = (): void => {
+    if (!data.omitEmptyState) {
+      list.setAttribute("data-subtitle-list-state", data.existingLanguages.length === 0 && !data.injectUnparseableRow ? "EMPTY" : "READY");
+    }
     while (list.firstChild) {
       list.removeChild(list.firstChild);
     }
