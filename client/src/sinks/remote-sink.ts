@@ -13,6 +13,8 @@ import type { Sink, SinkResult } from "./sink.js";
 export const ENDPOINT_PATHS = {
   ingestV1: "/api/v1/collections",
   registerV1: "/api/v1/installations/register",
+  configV1: "/api/v1/config",
+  errorsV1: "/api/v1/errors",
 } as const;
 
 export type EndpointAlias = keyof typeof ENDPOINT_PATHS;
@@ -45,6 +47,25 @@ export interface RegisterInstallationResult {
   /** Shown once to the user — caller must not log this. */
   token?: string;
   apiVersion?: string;
+}
+
+export interface ErrorIngestBody {
+  installation_id: string;
+  module?: string;
+  module_version?: string;
+  runtime_version?: string;
+  page?: string;
+  task_state?: string;
+  error_code?: string;
+  message: string;
+  layout_signature?: string;
+}
+
+export interface SendErrorOptions {
+  baseUrl: string;
+  token: string;
+  body: ErrorIngestBody;
+  fetchImpl?: typeof fetch;
 }
 
 /**
@@ -230,6 +251,79 @@ export async function registerInstallation(
     };
   } catch {
     return { status: "FAILED", message: "注册失败（网络错误）" };
+  }
+}
+
+/**
+ * POST /api/v1/errors — whitelist fields only; never send HTML dumps.
+ */
+export async function sendError(
+  options: SendErrorOptions,
+): Promise<RemoteResult> {
+  let url: string;
+  try {
+    url = resolveEndpoint(options.baseUrl, "errorsV1");
+  } catch (error) {
+    return {
+      status: "FAILED",
+      message: error instanceof Error ? error.message : "无效的服务器地址",
+    };
+  }
+  if (!options.token) {
+    return { status: "FAILED", message: "未配置 Installation Token" };
+  }
+
+  const fetchImpl = options.fetchImpl ?? fetch;
+  const body: Record<string, string> = {
+    installation_id: options.body.installation_id,
+    message: options.body.message.slice(0, 2000),
+  };
+  const optional: Array<keyof ErrorIngestBody> = [
+    "module",
+    "module_version",
+    "runtime_version",
+    "page",
+    "task_state",
+    "error_code",
+    "layout_signature",
+  ];
+  for (const key of optional) {
+    const value = options.body[key];
+    if (typeof value === "string" && value.length > 0) {
+      body[key] = value;
+    }
+  }
+
+  try {
+    const response = await fetchImpl(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${options.token}`,
+      },
+      body: JSON.stringify(body),
+    });
+    if (response.status === 201 || response.status === 200) {
+      return {
+        status: "OK",
+        httpStatus: response.status,
+        message: "错误已上报",
+      };
+    }
+    if (response.status === 401) {
+      return {
+        status: "FAILED",
+        httpStatus: 401,
+        message: "鉴权失败（token 无效或已禁用）",
+      };
+    }
+    return {
+      status: "FAILED",
+      httpStatus: response.status,
+      message: `错误上报失败（HTTP ${response.status}）`,
+    };
+  } catch {
+    return { status: "FAILED", message: "错误上报失败（网络错误）" };
   }
 }
 

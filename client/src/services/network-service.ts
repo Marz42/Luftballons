@@ -1,6 +1,6 @@
 /**
  * NetworkService (IMPLEMENTATION §21) — modules must not call fetch directly.
- * Phase 5a: sendCollection + register; getConfig/sendError are P5b stubs.
+ * Phase 5b: getConfig + sendError + OFF zero-network.
  */
 
 import type { Collection } from "../schemas/collection.js";
@@ -13,8 +13,16 @@ import {
   type SettingsStorage,
 } from "./network-settings.js";
 import {
+  applyFreshConfig,
+  fetchConfig,
+  resolveBootstrapConfig,
+  type AppliedConfigState,
+  type RemoteConfig,
+} from "./config-service.js";
+import {
   registerInstallation,
   sendCollection,
+  sendError,
   type RegisterInstallationResult,
   type RemoteResult,
 } from "../sinks/remote-sink.js";
@@ -24,24 +32,21 @@ import {
   type InstallationIdentity,
 } from "../schemas/installation.js";
 
-/** P5b placeholder — not fetched in Phase 5a. */
-export interface RemoteConfig {
-  schemaVersion: 1;
-  modules: Record<
-    string,
-    {
-      enabled: boolean;
-      killSwitch?: boolean;
-    }
-  >;
-  minRuntimeVersion?: string;
-  features?: Record<string, boolean>;
-}
+export type { RemoteConfig, AppliedConfigState };
 
 export interface ErrorRecord {
-  moduleId?: string;
+  installationId?: string;
+  module?: string;
+  moduleVersion?: string;
+  runtimeVersion?: string;
+  page?: string;
+  taskState?: string;
+  errorCode?: string;
   message: string;
-  capturedAt: string;
+  layoutSignature?: string;
+  /** @deprecated use module */
+  moduleId?: string;
+  capturedAt?: string;
 }
 
 export interface NetworkService {
@@ -50,13 +55,21 @@ export interface NetworkService {
   getSettings(): ServerSettings;
   saveSettings(patch: Partial<ServerSettings>): ServerSettings;
 
-  /** P5b: returns null (no Config API this phase). */
+  /** Applied remote config (defaults / cached / fresh). Never blocks startup. */
+  getAppliedConfig(): AppliedConfigState;
+
+  /**
+   * Fetch remote config when network allows. On failure keep previous applied.
+   * OFF → no network; returns current applied.
+   */
   getConfig(): Promise<RemoteConfig | null>;
+
+  /** Human-triggered refresh (SPEC §3.2). OFF → refused, zero fetch. */
+  refreshConfig(): Promise<AppliedConfigState>;
 
   sendCollection(collection: Collection<unknown>): Promise<RemoteResult>;
 
-  /** P5b stub — does not network. */
-  sendError?(error: ErrorRecord): Promise<RemoteResult>;
+  sendError(error: ErrorRecord): Promise<RemoteResult>;
 
   registerInstallation(options?: {
     displayName?: string;
@@ -68,18 +81,16 @@ export interface CreateNetworkServiceOptions {
   logger?: Logger;
   runtimeVersion?: string;
   fetchImpl?: typeof fetch;
-  /**
-   * After successful server register, persist installation_id locally.
-   * Token is saved via saveSettings by the caller/UI (or here).
-   */
   persistInstallation?: (identity: InstallationIdentity) => void;
   getInstallationId?: () => string;
+  /** Seed applied config (tests / bootstrap after cache load). */
+  initialApplied?: AppliedConfigState;
 }
 
 /**
  * OFF → zero network from this service.
- * MANUAL (default) → sendCollection only when explicitly invoked (sync button).
- * ENABLED reserved for later auto-sync; Phase 5a collectors never call this service.
+ * MANUAL (default) → sync/config only when explicitly invoked.
+ * ENABLED reserved for later auto-sync.
  */
 export function createNetworkService(
   options: CreateNetworkServiceOptions = {},
@@ -89,12 +100,57 @@ export function createNetworkService(
   const runtimeVersion = options.runtimeVersion ?? "0.1.0";
   const fetchImpl = options.fetchImpl;
 
+  let applied: AppliedConfigState =
+    options.initialApplied ?? resolveBootstrapConfig(storage);
+
   const persistIdentity = (identity: InstallationIdentity): void => {
     if (options.persistInstallation) {
       options.persistInstallation(identity);
     } else {
       setInstallation(identity, storage);
     }
+  };
+
+  const markRefreshFailed = (message: string): AppliedConfigState => {
+    const at = new Date().toISOString();
+    applied = {
+      ...applied,
+      lastRefresh: { ok: false, at, message },
+    };
+    return applied;
+  };
+
+  const doRefresh = async (): Promise<AppliedConfigState> => {
+    const settings = getServerSettings(storage);
+    if (settings.networkMode === "OFF") {
+      logger?.warn("Config refresh skipped: network mode OFF");
+      return markRefreshFailed("网络模式为 OFF，已跳过配置刷新");
+    }
+    if (!settings.baseUrl || !settings.token) {
+      return markRefreshFailed("未配置服务器地址或 token");
+    }
+
+    const result = await fetchConfig({
+      baseUrl: settings.baseUrl,
+      token: settings.token,
+      ...(fetchImpl !== undefined ? { fetchImpl } : {}),
+    });
+
+    if (result.status === "OK") {
+      applied = applyFreshConfig(result.config, storage);
+      logger?.info("Remote config refreshed", {
+        source: applied.source,
+        moduleKeys: Object.keys(result.config.modules),
+      });
+      return applied;
+    }
+
+    logger?.warn("Remote config refresh failed; keeping prior config", {
+      message: result.message,
+      httpStatus: result.httpStatus,
+      source: applied.source,
+    });
+    return markRefreshFailed(result.message);
   };
 
   const service: NetworkService = {
@@ -112,7 +168,6 @@ export function createNetworkService(
     },
 
     saveSettings(patch: Partial<ServerSettings>): ServerSettings {
-      // Never put token into logger context.
       const keys = Object.keys(patch).filter((k) => k !== "token");
       const saved = saveServerSettings(patch, storage);
       logger?.info("Server settings saved", {
@@ -124,9 +179,21 @@ export function createNetworkService(
       return saved;
     },
 
+    getAppliedConfig(): AppliedConfigState {
+      return applied;
+    },
+
     async getConfig(): Promise<RemoteConfig | null> {
-      // Phase 5b — Config API not implemented.
-      return null;
+      const settings = getServerSettings(storage);
+      if (settings.networkMode === "OFF") {
+        return applied.config;
+      }
+      const next = await doRefresh();
+      return next.source === "fresh" ? next.config : applied.config;
+    },
+
+    async refreshConfig(): Promise<AppliedConfigState> {
+      return doRefresh();
     },
 
     async sendCollection(
@@ -163,11 +230,59 @@ export function createNetworkService(
       return result;
     },
 
-    async sendError(_error: ErrorRecord): Promise<RemoteResult> {
-      return {
-        status: "FAILED",
-        message: "Error API 尚未实现（Phase 5b）",
-      };
+    async sendError(error: ErrorRecord): Promise<RemoteResult> {
+      const settings = getServerSettings(storage);
+      if (settings.networkMode === "OFF") {
+        logger?.warn("Error upload skipped: network mode OFF");
+        return {
+          status: "FAILED",
+          message: "网络模式为 OFF，已跳过错误上报",
+        };
+      }
+
+      const installationId =
+        error.installationId ??
+        (options.getInstallationId
+          ? options.getInstallationId()
+          : getOrCreateInstallation(storage).installationId);
+
+      const result = await sendError({
+        baseUrl: settings.baseUrl,
+        token: settings.token,
+        body: {
+          installation_id: installationId,
+          message: error.message,
+          ...(error.module !== undefined
+            ? { module: error.module }
+            : error.moduleId !== undefined
+              ? { module: error.moduleId }
+              : {}),
+          ...(error.moduleVersion !== undefined
+            ? { module_version: error.moduleVersion }
+            : {}),
+          ...(error.runtimeVersion !== undefined
+            ? { runtime_version: error.runtimeVersion }
+            : { runtime_version: runtimeVersion }),
+          ...(error.page !== undefined ? { page: error.page } : {}),
+          ...(error.taskState !== undefined
+            ? { task_state: error.taskState }
+            : {}),
+          ...(error.errorCode !== undefined
+            ? { error_code: error.errorCode }
+            : {}),
+          ...(error.layoutSignature !== undefined
+            ? { layout_signature: error.layoutSignature }
+            : {}),
+        },
+        ...(fetchImpl !== undefined ? { fetchImpl } : {}),
+      });
+
+      if (result.status === "OK") {
+        logger?.info("Error uploaded", { errorCode: error.errorCode });
+      } else {
+        logger?.warn("Error upload failed", { message: result.message });
+      }
+      return result;
     },
 
     async registerInstallation(registerOptions = {}): Promise<RegisterInstallationResult> {
@@ -198,7 +313,6 @@ export function createNetworkService(
         };
         persistIdentity(identity);
         saveServerSettings({ token: result.token }, storage);
-        // Log success without token.
         logger?.info("Installation registered", {
           installationId: result.installationId,
           apiVersion: result.apiVersion,
@@ -212,7 +326,6 @@ export function createNetworkService(
     },
   };
 
-  // Touch local installation so identity exists before optional register.
   if (options.getInstallationId) {
     options.getInstallationId();
   } else {
