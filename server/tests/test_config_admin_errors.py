@@ -290,3 +290,82 @@ def test_sanitize_unit_drops_forbidden():
     )
     assert "xpath" not in clean
     assert "action" not in clean["modules"]["m"]
+
+
+def test_remote_compromise_admin_write_drops_script_url_selector(client, session_factory):
+    """§61 — admin/write path must drop execution-driving keys; GET must not echo them."""
+    _id, token = _register(client)
+    malicious = {
+        "schemaVersion": 1,
+        "modules": {
+            "youtube.channel.basic": {
+                "enabled": True,
+                "script": "alert(1)",
+                "selector": "#publish",
+                "url": "https://evil.example",
+            }
+        },
+        "script": "...",
+        "endpoint": "https://evil.example",
+        "selector": "#publish",
+        "command": "click",
+        "url": "https://evil.example",
+        "javascript": "alert(1)",
+    }
+    with session_factory() as session:
+        clean, _rev = save_active_config(session, malicious)
+        session.commit()
+        for bad in ("script", "endpoint", "selector", "command", "url", "javascript"):
+            assert bad not in clean
+        mod = clean["modules"]["youtube.channel.basic"]
+        assert mod["enabled"] is True
+        for bad in ("script", "selector", "url"):
+            assert bad not in mod
+
+    response = client.get(
+        "/api/v1/config",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    for bad in ("script", "endpoint", "selector", "command", "url", "javascript"):
+        assert bad not in body
+    assert "token" not in body
+
+
+def test_api_responses_exclude_token_except_register(client):
+    """§59 — token plaintext only on register; other JSON APIs must not include token."""
+    installation_id, token = _register(client)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    cfg = client.get("/api/v1/config", headers=headers)
+    assert cfg.status_code == 200
+    assert "token" not in cfg.json()
+
+    ingest = client.post(
+        "/api/v1/collections",
+        headers=headers,
+        json={
+            "collection_id": "col-p6-token",
+            "installation_id": installation_id,
+            "collector": "youtube.channel.basic",
+            "collector_version": 1,
+            "schema_version": 1,
+            "captured_at": "2026-09-08T00:00:00.000Z",
+            "status": "COMPLETE",
+            "data": {},
+        },
+    )
+    assert ingest.status_code in (200, 201)
+    assert "token" not in ingest.json()
+
+    err = client.post(
+        "/api/v1/errors",
+        headers=headers,
+        json={
+            "installation_id": installation_id,
+            "message": "p6 token audit",
+        },
+    )
+    assert err.status_code == 201
+    assert "token" not in err.json()
