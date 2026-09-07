@@ -191,10 +191,11 @@ export async function readLanguageRows(
     if (byCode.has(key)) {
       return;
     }
+    const label = (el.textContent ?? "").replace(/\s+/g, " ").trim();
     byCode.set(key, {
       code,
-      label: (el.textContent ?? "").replace(/\s+/g, " ").trim() || undefined,
       state: rowStateFromElement(el),
+      ...(label ? { label } : {}),
     });
   };
 
@@ -271,6 +272,14 @@ class UiMismatchError extends Error {
   }
 }
 
+class WaitTimeoutError extends Error {
+  readonly code = "WAIT_TIMEOUT";
+  constructor(message: string) {
+    super(message);
+    this.name = "WaitTimeoutError";
+  }
+}
+
 /**
  * Unique active subtitle editor — fail closed if missing / ambiguous.
  */
@@ -286,8 +295,37 @@ async function requireEditor(
   return editor;
 }
 
-function scopedDom(root: ParentNode): CancellableDomService {
-  return createDomService({ root, defaultTimeoutMs: 2_000 });
+function scopedDom(root: ParentNode, timeoutMs = 2_000): CancellableDomService {
+  return createDomService({ root, defaultTimeoutMs: timeoutMs });
+}
+
+async function waitPickerClosed(
+  editorDom: CancellableDomService,
+  signal: AbortSignal,
+  timeoutMs = 2_000,
+): Promise<void> {
+  throwIfAborted(signal);
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() <= deadline) {
+    throwIfAborted(signal);
+    const picker = await editorDom.find(
+      getSubtitleTarget("subtitle.language.picker"),
+    );
+    if (!picker) {
+      return;
+    }
+    await new Promise<void>((resolve, reject) => {
+      const t = window.setTimeout(resolve, 20);
+      const onAbort = (): void => {
+        window.clearTimeout(t);
+        reject(new DOMException("Aborted", "AbortError"));
+      };
+      signal.addEventListener("abort", onAbort, { once: true });
+    });
+  }
+  throw new WaitTimeoutError(
+    "Language picker did not close after option selection",
+  );
 }
 
 async function addLanguage(
@@ -308,23 +346,34 @@ async function addLanguage(
   await editorDom.click(addBtn);
   throwIfAborted(signal);
 
-  // Picker must be uniquely open inside the editor — no global option fallback.
+  // Wait: menu appears (cancellable, no fixed sleep)
   const pickerTarget = getSubtitleTarget("subtitle.language.picker");
-  const picker = await editorDom.find(pickerTarget);
-  if (!picker) {
-    throw new UiMismatchError(
-      'Language picker not open / not unique (assumption "subtitle.language.picker")',
+  let picker: Element;
+  try {
+    picker = await editorDom.waitFor(pickerTarget, 2_000, signal);
+  } catch (error) {
+    if (isAbortError(error) || signal.aborted) {
+      throw error;
+    }
+    throw new WaitTimeoutError(
+      'Language picker did not appear after Add language (assumption "subtitle.language.picker")',
     );
   }
 
   const pickerDom = scopedDom(picker);
   const option = optionTargetFor(lang);
-  const found = await pickerDom.find(option);
-  if (!found) {
-    throw new Error(
-      `Language option not found for ${lang.code} inside open picker`,
+  let found: Element;
+  try {
+    found = await pickerDom.waitFor(option, 2_000, signal);
+  } catch (error) {
+    if (isAbortError(error) || signal.aborted) {
+      throw error;
+    }
+    throw new WaitTimeoutError(
+      `Language option not ready for ${lang.code} inside open picker`,
     );
   }
+
   if (found instanceof HTMLElement) {
     found.click();
   } else {
@@ -332,6 +381,31 @@ async function addLanguage(
       new MouseEvent("click", { bubbles: true, cancelable: true }),
     );
   }
+  throwIfAborted(signal);
+
+  // Wait: add result — pending or published row appears in list
+  const pendingTarget: DomTarget = {
+    id: `subtitle.language.row.${lang.code}`,
+    selectorFallback: [
+      `[data-luftballons-subtitle-lang="${lang.code}"]`,
+      `[data-language-code="${lang.code}"]`,
+    ],
+    matches: isActiveElement,
+    unique: true,
+  };
+  try {
+    await editorDom.waitFor(pendingTarget, 2_000, signal);
+  } catch (error) {
+    if (isAbortError(error) || signal.aborted) {
+      throw error;
+    }
+    throw new WaitTimeoutError(
+      `Language row for ${lang.code} did not appear after option click`,
+    );
+  }
+
+  // Wait: picker closed / editor operable before next language
+  await waitPickerClosed(editorDom, signal);
 }
 
 async function publishSubtitles(
@@ -577,13 +651,14 @@ export async function runSubtitleMultilangWorkflow(
         if (isAbortError(error) || ctx.signal.aborted) {
           throw error;
         }
-        // SPEC §37: single-language failure must not sink the whole task
         const message =
           error instanceof Error ? error.message : "add failed";
         const code =
           error instanceof UiMismatchError
             ? "UI_MISMATCH"
-            : "LANGUAGE_ADD_FAILED";
+            : error instanceof WaitTimeoutError
+              ? "WAIT_TIMEOUT"
+              : "LANGUAGE_ADD_FAILED";
         outcomes.push({
           code: lang.code,
           label: lang.label,
@@ -594,6 +669,21 @@ export async function runSubtitleMultilangWorkflow(
           code,
           message: `${lang.code}: ${message}`,
         });
+        // P2-1: wait/recovery failure → stop; do not continue next language
+        if (
+          error instanceof WaitTimeoutError ||
+          error instanceof UiMismatchError
+        ) {
+          for (const rest of toAdd.slice(toAdd.indexOf(lang) + 1)) {
+            outcomes.push({
+              code: rest.code,
+              label: rest.label,
+              status: "CANCELLED",
+              detail: "Stopped after prior language wait/UI failure",
+            });
+          }
+          break;
+        }
       }
     }
   }

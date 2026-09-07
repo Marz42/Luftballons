@@ -131,6 +131,10 @@ export interface SubtitleFixtureData {
    */
   addLanguageNoOp?: boolean;
   /**
+   * P2-1: delay before picker becomes visible after Add language click.
+   */
+  pickerOpenDelayMs?: number;
+  /**
    * P1-2c: inside the open picker, also mount an "existing language row"
    * decoy with data-language-code (must not be treated as a selectable option).
    */
@@ -491,7 +495,15 @@ function appendSubtitlesBody(
   addBtn.textContent = "Add language";
   addBtn.addEventListener("click", () => {
     clickCounts.addLanguage += 1;
-    if (!data.addLanguageNoOp) {
+    if (data.addLanguageNoOp) {
+      return;
+    }
+    const delay = data.pickerOpenDelayMs ?? 0;
+    if (delay > 0) {
+      window.setTimeout(() => {
+        picker.hidden = false;
+      }, delay);
+    } else {
       picker.hidden = false;
     }
   });

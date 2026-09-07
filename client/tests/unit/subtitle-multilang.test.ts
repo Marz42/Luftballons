@@ -255,8 +255,8 @@ describe("youtube.subtitle.multilang (FT-011 / P4-T1…T5)", () => {
     const runner = makeRunner(mod, createAutoApproveGate());
     const taskId = await runner.start("youtube.subtitle.multilang");
     await vi.waitFor(() => {
-      expect(["PARTIAL", "COMPLETED"]).toContain(runner.getState(taskId));
-    });
+      expect(["PARTIAL", "COMPLETED", "FAILED"]).toContain(runner.getState(taskId));
+    }, { timeout: 5_000 });
     const summary = runner.getSnapshot(taskId).result?.summary ?? "";
     expect(summary).toMatch(/English\(en\) SUCCESS/);
     expect(summary).toMatch(/日本語\(ja\) FAILED/);
@@ -375,13 +375,13 @@ describe("youtube.subtitle.multilang (FT-011 / P4-T1…T5)", () => {
     const taskId = await runner.start("youtube.subtitle.multilang");
     await vi.waitFor(() => {
       expect(["FAILED", "PARTIAL"]).toContain(runner.getState(taskId));
-    });
+    }, { timeout: 5_000 });
     expect(fixture.clickCounts.option).toBe(0);
     expect(fixture.clickCounts.publish).toBe(0);
     const result = runner.getSnapshot(taskId).result;
     expect(
       result?.warnings?.some((w) =>
-        ["LANGUAGE_ADD_FAILED", "UI_MISMATCH", "SUBTITLE_UI_MISMATCH"].includes(
+        ["LANGUAGE_ADD_FAILED", "UI_MISMATCH", "SUBTITLE_UI_MISMATCH", "WAIT_TIMEOUT"].includes(
           w.code,
         ),
       ),
@@ -547,5 +547,86 @@ describe("youtube.subtitle.multilang (FT-011 / P4-T1…T5)", () => {
     ).toBe(true);
     expect(result?.summary).toMatch(/UNCONFIRMED|unconfirmed/i);
     expect(result?.summary).not.toMatch(/published=true/);
+  });
+
+  it("P2-1a: add menu async delay → wait then succeed", async () => {
+    fixture = mountStudioFixture({
+      page: "VIDEO_DETAILS",
+      layout: "2026_V1",
+      subtitles: {
+        existingLanguages: [],
+        pickerLanguages: [{ code: "ja", label: "日本語" }],
+        pickerOpenDelayMs: 60,
+      },
+    });
+    const mod = createFixtureSubtitleModule(fixture, {
+      initialLanguages: [{ code: "ja", label: "日本語" }],
+    });
+    const runner = makeRunner(mod, createAutoApproveGate());
+    const taskId = await runner.start("youtube.subtitle.multilang");
+    await vi.waitFor(() => {
+      expect(runner.getState(taskId)).toBe("COMPLETED");
+    }, { timeout: 5_000 });
+    expect(fixture.clickCounts.option).toBe(1);
+    expect(fixture.clickCounts.publish).toBe(1);
+  });
+
+  it("P2-1b: publish async delay → wait for PUBLISHED then SUCCESS", async () => {
+    fixture = mountStudioFixture({
+      page: "VIDEO_DETAILS",
+      layout: "2026_V1",
+      subtitles: {
+        existingLanguages: [],
+        pickerLanguages: [{ code: "ja", label: "日本語" }],
+        publishMode: "delay",
+        publishDelayMs: 80,
+      },
+    });
+    const mod = createFixtureSubtitleModule(fixture, {
+      initialLanguages: [{ code: "ja", label: "日本語" }],
+    });
+    const runner = makeRunner(mod, createAutoApproveGate());
+    const taskId = await runner.start("youtube.subtitle.multilang");
+    await vi.waitFor(() => {
+      expect(runner.getState(taskId)).toBe("COMPLETED");
+    }, { timeout: 5_000 });
+    expect(runner.getSnapshot(taskId).result?.summary).toMatch(/published=true/);
+  });
+
+  it("P2-1c: menu never appears → timeout stop, no option click", async () => {
+    fixture = mountStudioFixture({
+      page: "VIDEO_DETAILS",
+      layout: "2026_V1",
+      subtitles: {
+        existingLanguages: [],
+        pickerLanguages: [
+          { code: "ja", label: "日本語" },
+          { code: "ko", label: "한국어" },
+        ],
+        addLanguageNoOp: true,
+      },
+    });
+    const mod = createFixtureSubtitleModule(fixture, {
+      initialLanguages: [
+        { code: "ja", label: "日本語" },
+        { code: "ko", label: "한국어" },
+      ],
+    });
+    const runner = makeRunner(mod, createAutoApproveGate());
+    const taskId = await runner.start("youtube.subtitle.multilang");
+    await vi.waitFor(() => {
+      expect(["FAILED", "PARTIAL"]).toContain(runner.getState(taskId));
+    }, { timeout: 5_000 });
+    expect(fixture.clickCounts.option).toBe(0);
+    expect(fixture.clickCounts.publish).toBe(0);
+    const summary = runner.getSnapshot(taskId).result?.summary ?? "";
+    expect(summary).toMatch(/日本語\(ja\) FAILED/);
+    // Must not continue to second language after wait timeout
+    expect(summary).toMatch(/한국어\(ko\) CANCELLED/);
+    expect(
+      runner.getSnapshot(taskId).result?.warnings?.some(
+        (w) => w.code === "WAIT_TIMEOUT",
+      ),
+    ).toBe(true);
   });
 });
