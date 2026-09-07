@@ -17,14 +17,15 @@ import {
   immediateWait,
   waitForAbortableStep,
 } from "./step-control.js";
-
-const STUDIO_HOST = "studio.youtube.com";
+import { studioModuleAvailability } from "../sites/youtube-studio/page-detector.js";
 
 export interface StubModuleOptions {
   /** Injected wait; tests should pass immediateWait to avoid real sleeps. */
   wait?: (ms: number, signal: AbortSignal) => Promise<void>;
   stepDelayMs?: number;
   onStep?: (step: string, ctx: TaskContext) => void;
+  /** Override document for layout detect (tests). Defaults to global document. */
+  detectDocument?: Document;
 }
 
 export interface ChannelBasicStubOptions extends StubModuleOptions {
@@ -37,15 +38,15 @@ export interface ChannelBasicStubOptions extends StubModuleOptions {
   collectorVersion?: number;
 }
 
-function detectStudioSite(ctx: DetectContext): ModuleAvailability {
-  if (ctx.hostname !== STUDIO_HOST) {
-    return {
-      available: false,
-      reason: "WRONG_SITE",
-      metadata: { hostname: ctx.hostname },
-    };
-  }
-  return { available: true };
+function detectStudioSite(
+  ctx: DetectContext,
+  detectDocument?: Document,
+): ModuleAvailability {
+  return studioModuleAvailability({
+    hostname: ctx.hostname,
+    href: ctx.href,
+    ...(detectDocument !== undefined ? { document: detectDocument } : {}),
+  });
 }
 
 function isAbortError(error: unknown): boolean {
@@ -92,7 +93,7 @@ export function createChannelBasicStub(
     version: "0.1.0",
     site: "youtube-studio",
     capabilities: CHANNEL_CAPS,
-    detect: async (ctx) => detectStudioSite(ctx),
+    detect: async (ctx) => detectStudioSite(ctx, options.detectDocument),
     run: async (ctx): Promise<TaskResult> => {
       try {
         const stepResult = await runSimulatedSteps(
@@ -159,7 +160,7 @@ export function createSubtitleMultilangStub(
     version: "0.1.0",
     site: "youtube-studio",
     capabilities: SUBTITLE_CAPS,
-    detect: async (ctx) => detectStudioSite(ctx),
+    detect: async (ctx) => detectStudioSite(ctx, options.detectDocument),
     run: async (ctx) => {
       try {
         const stepResult = await runSimulatedSteps(

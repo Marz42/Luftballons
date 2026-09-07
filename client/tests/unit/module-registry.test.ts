@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { ModuleRegistry } from "../../src/runtime/module-registry.js";
 import {
   ModuleAlreadyRegisteredError,
@@ -9,8 +9,20 @@ import {
   createSubtitleMultilangStub,
 } from "../../src/modules/youtube-studio-stubs.js";
 import { createLogger } from "../../src/services/logger.js";
+import {
+  mountStudioFixture,
+  type StudioFixtureHandle,
+} from "../fixtures/studio-simulated.js";
 
 describe("ModuleRegistry", () => {
+  let fixture: StudioFixtureHandle | undefined;
+
+  afterEach(() => {
+    fixture?.destroy();
+    fixture = undefined;
+    document.body.replaceChildren();
+  });
+
   it("registers and looks up modules by id", () => {
     const registry = new ModuleRegistry();
     const channel = createChannelBasicStub();
@@ -40,6 +52,7 @@ describe("ModuleRegistry", () => {
   });
 
   it("aggregates availability: studio available, www WRONG_SITE", async () => {
+    fixture = mountStudioFixture({ layout: "2026_V1" });
     const registry = new ModuleRegistry();
     registry.register(createChannelBasicStub());
     registry.register(createSubtitleMultilangStub());
@@ -47,7 +60,7 @@ describe("ModuleRegistry", () => {
 
     const studio = await registry.detectAll({
       hostname: "studio.youtube.com",
-      href: "https://studio.youtube.com/",
+      href: fixture.href,
       logger,
     });
     expect(studio.every((e) => e.availability.available)).toBe(true);
@@ -62,5 +75,19 @@ describe("ModuleRegistry", () => {
       expect(entry.availability.available).toBe(false);
       expect(entry.availability.reason).toBe("WRONG_SITE");
     }
+  });
+
+  it("marks studio modules unavailable on UNKNOWN layout", async () => {
+    fixture = mountStudioFixture({ layout: "NONE" });
+    const registry = new ModuleRegistry();
+    registry.register(createChannelBasicStub());
+    const logger = createLogger({ minLevel: "ERROR", sink: () => {} });
+    const entries = await registry.detectAll({
+      hostname: "studio.youtube.com",
+      href: fixture.href,
+      logger,
+    });
+    expect(entries[0]?.availability.available).toBe(false);
+    expect(entries[0]?.availability.reason).toBe("UNSUPPORTED_LAYOUT");
   });
 });

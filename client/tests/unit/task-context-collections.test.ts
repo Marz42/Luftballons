@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ModuleRegistry } from "../../src/runtime/module-registry.js";
 import { TaskRunner } from "../../src/runtime/task-runner.js";
 import { createChannelBasicStub } from "../../src/modules/youtube-studio-stubs.js";
@@ -8,13 +8,26 @@ import {
   NoopCollectionService,
 } from "../../src/services/collection-service.js";
 import type { LuftballonsModule, TaskContext } from "../../src/runtime/types.js";
+import {
+  mountStudioFixture,
+  type StudioFixtureHandle,
+} from "../fixtures/studio-simulated.js";
 
 function silentLogger() {
   return createLogger({ minLevel: "ERROR", sink: () => {} });
 }
 
 describe("TaskContext.collections injection", () => {
+  let fixture: StudioFixtureHandle | undefined;
+
+  afterEach(() => {
+    fixture?.destroy();
+    fixture = undefined;
+    document.body.replaceChildren();
+  });
+
   it("defaults to NoopCollectionService when not injected", async () => {
+    fixture = mountStudioFixture({ layout: "2026_V1" });
     let seen: TaskContext["collections"] | undefined;
     const module: LuftballonsModule = {
       ...createChannelBasicStub({ wait: async () => {} }),
@@ -30,7 +43,7 @@ describe("TaskContext.collections injection", () => {
       logger: silentLogger(),
       getLocation: () => ({
         hostname: "studio.youtube.com",
-        href: "https://studio.youtube.com/",
+        href: fixture!.href,
       }),
     });
 
@@ -43,6 +56,7 @@ describe("TaskContext.collections injection", () => {
   });
 
   it("injects IndexedDbCollectionService into TaskContext", async () => {
+    fixture = mountStudioFixture({ layout: "2026_V1" });
     const dbName = `luftballons-ctx-${Math.random().toString(16).slice(2)}`;
     const collections = new IndexedDbCollectionService({ dbName });
     const module = createChannelBasicStub({
@@ -70,7 +84,7 @@ describe("TaskContext.collections injection", () => {
       collectionService: collections,
       getLocation: () => ({
         hostname: "studio.youtube.com",
-        href: "https://studio.youtube.com/",
+        href: fixture!.href,
       }),
     });
 
@@ -95,6 +109,7 @@ describe("TaskContext.collections injection", () => {
   });
 
   it("maps PARTIAL collection status to TaskResult PARTIAL", async () => {
+    fixture = mountStudioFixture({ layout: "2026_V1" });
     const module = createChannelBasicStub({
       wait: async () => {},
       collectionStatus: "PARTIAL",
@@ -106,7 +121,7 @@ describe("TaskContext.collections injection", () => {
       logger: silentLogger(),
       getLocation: () => ({
         hostname: "studio.youtube.com",
-        href: "https://studio.youtube.com/",
+        href: fixture!.href,
       }),
     });
     const taskId = await runner.start("youtube.channel.basic");

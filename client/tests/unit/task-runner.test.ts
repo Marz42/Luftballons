@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ModuleRegistry } from "../../src/runtime/module-registry.js";
 import { TaskRunner } from "../../src/runtime/task-runner.js";
 import {
@@ -8,6 +8,10 @@ import {
 import { createChannelBasicStub } from "../../src/modules/youtube-studio-stubs.js";
 import { createLogger } from "../../src/services/logger.js";
 import type { LuftballonsModule, TaskContext } from "../../src/runtime/types.js";
+import {
+  mountStudioFixture,
+  type StudioFixtureHandle,
+} from "../fixtures/studio-simulated.js";
 
 function silentLogger() {
   return createLogger({ minLevel: "ERROR", sink: () => {} });
@@ -25,13 +29,25 @@ function makeRunner(module: LuftballonsModule, hostname = "studio.youtube.com") 
     })(),
     getLocation: () => ({
       hostname,
-      href: `https://${hostname}/`,
+      href:
+        hostname === "studio.youtube.com"
+          ? "https://studio.youtube.com/channel/UC_demo_channel"
+          : `https://${hostname}/`,
     }),
   });
 }
 
 describe("TaskRunner", () => {
+  let fixture: StudioFixtureHandle | undefined;
+
+  afterEach(() => {
+    fixture?.destroy();
+    fixture = undefined;
+    document.body.replaceChildren();
+  });
+
   it("transitions IDLE→RUNNING→COMPLETED", async () => {
+    fixture = mountStudioFixture({ layout: "2026_V1" });
     const steps: string[] = [];
     const runner = makeRunner(
       createChannelBasicStub({
@@ -57,6 +73,7 @@ describe("TaskRunner", () => {
   });
 
   it("enforces one-task rule with TaskBusyError", async () => {
+    fixture = mountStudioFixture({ layout: "2026_V1" });
     let release!: () => void;
     const gate = new Promise<void>((resolve) => {
       release = resolve;
@@ -93,6 +110,7 @@ describe("TaskRunner", () => {
   });
 
   it("cancel aborts signal and ends CANCELLED without further steps", async () => {
+    fixture = mountStudioFixture({ layout: "2026_V1" });
     const seen: string[] = [];
     let proceed!: () => void;
     const firstStep = new Promise<void>((resolve) => {
@@ -132,9 +150,10 @@ describe("TaskRunner", () => {
   });
 
   it("maps module abort wait to CANCELLED via AbortSignal", async () => {
+    fixture = mountStudioFixture({ layout: "2026_V1" });
     let signalRef: AbortSignal | undefined;
     const module = createChannelBasicStub({
-      wait: (ms, signal) => {
+      wait: (_ms, signal) => {
         signalRef = signal;
         return new Promise((_resolve, reject) => {
           signal.addEventListener(
@@ -165,7 +184,16 @@ describe("TaskRunner", () => {
     );
   });
 
+  it("refuses modules when layout is UNKNOWN", async () => {
+    fixture = mountStudioFixture({ layout: "NONE" });
+    const runner = makeRunner(createChannelBasicStub());
+    await expect(runner.start("youtube.channel.basic")).rejects.toBeInstanceOf(
+      ModuleUnavailableError,
+    );
+  });
+
   it("transitions to FAILED when run throws", async () => {
+    fixture = mountStudioFixture({ layout: "2026_V1" });
     const module: LuftballonsModule = {
       ...createChannelBasicStub(),
       run: async () => {
