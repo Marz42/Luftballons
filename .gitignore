@@ -11,3 +11,14 @@ coverage/
 .env
 .env.*
 !.env.example
+
+# Server (Phase 5a)
+server/.venv/
+server/**/__pycache__/
+server/.pytest_cache/
+server/*.egg-info/
+server/data/*.db
+server/tests/_tmp_test.db
+*.db
+!server/data/.gitkeep
+server/*.egg-info/
