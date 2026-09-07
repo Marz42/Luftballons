@@ -101,15 +101,25 @@ describe("TaskContext.collections injection", () => {
   });
 
   it("maps PARTIAL collection status to TaskResult PARTIAL", async () => {
+    // Collector v2: Dashboard views readable + Analytics metrics missing (em dash)
+    // → preserve Dashboard summary, missing subscriberDelta → PARTIAL (fast path).
+    // (omitVideoList no longer works as a quick PARTIAL: content waitFor is ~5s.)
     fixture = mountStudioFixture({
       layout: "2026_V1",
       collector: {
         channelName: "Partial Via Fixture",
         periodLabel: "Last 28 days",
         dashboardViews: "100",
-        dashboardSubscriberDelta: "1",
-        recentVideos: [],
-        omitVideoList: true,
+        analyticsViews: "—",
+        analyticsSubscriberDelta: "—",
+        recentVideos: [
+          {
+            videoId: "vid_partial_map",
+            title: "Partial mapping video",
+            publishedAt: "2026-09-01",
+            viewsText: "10",
+          },
+        ],
       },
     });
     const module = createFixtureChannelModule(fixture);

@@ -62,4 +62,4 @@ Verify the saved Collection and JSON/CSV export against the UI. Then complete th
 P3 cancel, Network OFF and ten-run checklist. Multi-page traversal, empty lists,
 nonzero growth, other languages/layouts and multiple profiles remain live-unverified.
 
-Automated validation for this change: 86 tests, TypeScript noEmit, Vite build.
+Automated validation for this change: 89 tests, TypeScript noEmit, Vite build.
