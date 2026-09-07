@@ -185,6 +185,62 @@ export const STUDIO_TARGETS = {
 } as const satisfies Record<string, DomTarget>;
 
 /**
+ * Subtitle editor DomTargets (FT-011).
+ * ALL entries are assumptions until live subtitle-page DOM evidence arrives.
+ * Do not remove "assumption, calibrate on real device" comments or claim verified.
+ */
+export const SUBTITLE_TARGETS = {
+  "subtitle.languages.list": {
+    id: "subtitle.languages.list",
+    // assumption, calibrate on real device
+    ariaLabel: "Subtitle languages",
+    selectorFallback:
+      '[data-luftballons-target="subtitle.languages.list"], ytcp-uploads-dialog #language-list, #translations-list',
+  },
+  "subtitle.language.item": {
+    id: "subtitle.language.item",
+    // assumption, calibrate on real device — relative rows under languages.list
+    selectorFallback:
+      '[data-luftballons-subtitle-lang], [data-language-code], ytcp-language-item',
+  },
+  "subtitle.add_language": {
+    id: "subtitle.add_language",
+    // assumption, calibrate on real device
+    ariaLabel: "Add language",
+    role: "button",
+    selectorFallback:
+      '[data-luftballons-target="subtitle.add_language"], #add-language-button, button[aria-label*="Add language"]',
+  },
+  "subtitle.language.picker": {
+    id: "subtitle.language.picker",
+    // assumption, calibrate on real device — picker / menu after Add language
+    ariaLabel: "Language picker",
+    selectorFallback:
+      '[data-luftballons-target="subtitle.language.picker"], #language-picker, tp-yt-paper-listbox',
+  },
+  "subtitle.language.option": {
+    id: "subtitle.language.option",
+    // assumption, calibrate on real device — option row; code via data-language-code
+    selectorFallback:
+      '[data-luftballons-subtitle-option], [data-language-code], tp-yt-paper-item',
+  },
+  "subtitle.publish": {
+    id: "subtitle.publish",
+    // assumption, calibrate on real device — WRITE_COMMIT surface
+    ariaLabel: "Publish",
+    role: "button",
+    selectorFallback:
+      '[data-luftballons-target="subtitle.publish"], #publish-button, button[aria-label*="Publish"]',
+  },
+} as const satisfies Record<string, DomTarget>;
+
+export type SubtitleTargetId = keyof typeof SUBTITLE_TARGETS;
+
+export function getSubtitleTarget(id: SubtitleTargetId): DomTarget {
+  return SUBTITLE_TARGETS[id];
+}
+
+/**
  * Relative selector for recent-video rows under content.videos.list.
  * Real row host is ytcp-video-row; data-* alternatives support simulated fixtures.
  */
