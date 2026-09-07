@@ -1,13 +1,12 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { bootstrap } from "../../src/bootstrap/bootstrap.js";
-import { createSubtitleMultilangStub } from "../../src/modules/youtube-studio-stubs.js";
-import { immediateWait } from "../../src/modules/step-control.js";
 import type { PanelHandle } from "../../src/ui/panel.js";
 import {
   mountStudioFixture,
   type StudioFixtureHandle,
 } from "../fixtures/studio-simulated.js";
 import { createFixtureChannelModule } from "./channel-basic-test-utils.js";
+import { createFixtureSubtitleModule } from "./subtitle-multilang-test-utils.js";
 
 describe("Luftballons panel UI", () => {
   let panel: PanelHandle | undefined;
@@ -30,7 +29,7 @@ describe("Luftballons panel UI", () => {
     const result = await bootstrap({
       modules: [
         createFixtureChannelModule(fixture),
-        createSubtitleMultilangStub({ wait: immediateWait }),
+        createFixtureSubtitleModule(fixture),
       ],
     });
     panel = result.panel;
@@ -60,6 +59,7 @@ describe("Luftballons panel UI", () => {
   });
 
   it("shows unavailable on www.youtube.com", async () => {
+    fixture = mountStudioFixture({ page: "VIDEO_DETAILS", layout: "2026_V1" });
     Object.defineProperty(window, "location", {
       value: {
         hostname: "www.youtube.com",
@@ -70,12 +70,7 @@ describe("Luftballons panel UI", () => {
     });
 
     const result = await bootstrap({
-      modules: [
-        createSubtitleMultilangStub({
-          wait: immediateWait,
-          detectDocument: document,
-        }),
-      ],
+      modules: [createFixtureSubtitleModule(fixture)],
     });
     panel = result.panel;
     panel.open();

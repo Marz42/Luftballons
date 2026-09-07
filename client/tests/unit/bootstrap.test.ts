@@ -1,12 +1,26 @@
 import { describe, expect, it } from "vitest";
 import { bootstrap } from "../../src/bootstrap/bootstrap.js";
-import { createSubtitleMultilangStub } from "../../src/modules/youtube-studio-stubs.js";
-import { immediateWait } from "../../src/modules/step-control.js";
+import { createFixtureChannelModule } from "./channel-basic-test-utils.js";
+import { createFixtureSubtitleModule } from "./subtitle-multilang-test-utils.js";
+import {
+  mountStudioFixture,
+  type StudioFixtureHandle,
+} from "../fixtures/studio-simulated.js";
+import { afterEach } from "vitest";
 
 describe("bootstrap", () => {
+  let fixture: StudioFixtureHandle | undefined;
+
+  afterEach(() => {
+    fixture?.destroy();
+    fixture = undefined;
+    document.body.replaceChildren();
+  });
+
   it("initializes runtime with bundled defaults and registered modules", async () => {
+    fixture = mountStudioFixture({ page: "VIDEO_DETAILS", layout: "2026_V1" });
     const { runtime, panel } = await bootstrap({
-      modules: [createSubtitleMultilangStub({ wait: immediateWait })],
+      modules: [createFixtureSubtitleModule(fixture)],
       mount: false,
     });
     expect(runtime.version).toBe("0.1.0");
@@ -15,7 +29,7 @@ describe("bootstrap", () => {
     panel.destroy();
   });
 
-  it("default modules include real channel.basic + subtitle stub", async () => {
+  it("default modules include real channel.basic + subtitle.multilang", async () => {
     const { runtime, panel, studioAdapter } = await bootstrap({
       mount: false,
     });
@@ -25,6 +39,9 @@ describe("bootstrap", () => {
     expect(ids).toContain("youtube.subtitle.multilang");
     expect(
       runtime.registry.get("youtube.channel.basic")?.name,
+    ).not.toMatch(/stub/i);
+    expect(
+      runtime.registry.get("youtube.subtitle.multilang")?.name,
     ).not.toMatch(/stub/i);
     panel.destroy();
   });

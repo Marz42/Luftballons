@@ -5,8 +5,6 @@ import {
   ModuleUnavailableError,
   TaskBusyError,
 } from "../../src/runtime/errors.js";
-import { createSubtitleMultilangStub } from "../../src/modules/youtube-studio-stubs.js";
-import { immediateWait } from "../../src/modules/step-control.js";
 import { createLogger } from "../../src/services/logger.js";
 import type { LuftballonsModule, TaskContext } from "../../src/runtime/types.js";
 import {
@@ -14,7 +12,12 @@ import {
   type StudioFixtureHandle,
 } from "../fixtures/studio-simulated.js";
 import { createFixtureChannelModule } from "./channel-basic-test-utils.js";
+import {
+  createAutoApproveGate,
+  createFixtureSubtitleModule,
+} from "./subtitle-multilang-test-utils.js";
 import { studioModuleAvailability } from "../../src/sites/youtube-studio/page-detector.js";
+
 
 function silentLogger() {
   return createLogger({ minLevel: "ERROR", sink: () => {} });
@@ -235,17 +238,25 @@ describe("TaskRunner", () => {
     });
   });
 
-  it("subtitle stub still registers and completes (channel stub removed)", async () => {
-    fixture = mountStudioFixture({ layout: "2026_V1" });
-    const runner = makeRunner(
-      createSubtitleMultilangStub({ wait: immediateWait }),
-    );
-    // Wrong module id for makeRunner registration — register properly:
+  it("subtitle.multilang registers and completes with Human Gate approval", async () => {
+    fixture = mountStudioFixture({
+      page: "VIDEO_DETAILS",
+      layout: "2026_V1",
+      subtitles: {
+        existingLanguages: [{ code: "en", label: "English" }],
+        pickerLanguages: [{ code: "en", label: "English" }],
+      },
+    });
     const registry = new ModuleRegistry();
-    registry.register(createSubtitleMultilangStub({ wait: immediateWait }));
+    registry.register(
+      createFixtureSubtitleModule(fixture, {
+        initialLanguages: [{ code: "en", label: "English" }],
+      }),
+    );
     const subRunner = new TaskRunner({
       registry,
       logger: silentLogger(),
+      humanGate: createAutoApproveGate(),
       getLocation: () => ({
         hostname: "studio.youtube.com",
         href: fixture!.href,
@@ -255,6 +266,5 @@ describe("TaskRunner", () => {
     await vi.waitFor(() => {
       expect(subRunner.getState(taskId)).toBe("COMPLETED");
     });
-    void runner;
   });
 });

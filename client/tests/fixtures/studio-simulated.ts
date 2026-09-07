@@ -98,6 +98,34 @@ export interface CollectorFixtureData {
   omitVideoList?: boolean;
 }
 
+/**
+ * Simulated subtitle editor surface (Phase 4).
+ * ALL structure is assumption-marked — not live Studio evidence.
+ */
+export interface SubtitleFixtureData {
+  /** Existing published language codes on the video. */
+  existingLanguages: Array<{ code: string; label: string }>;
+  /**
+   * Available options in the Add-language picker.
+   * Defaults to a small MVP set when omitted.
+   */
+  pickerLanguages?: Array<{ code: string; label: string }>;
+  /** When true, omit the languages list container (P4-T4 UI mismatch). */
+  omitLanguagesList?: boolean;
+  /** When true, omit add / publish controls. */
+  omitControls?: boolean;
+}
+
+export const DEFAULT_SUBTITLE_DATA: SubtitleFixtureData = {
+  existingLanguages: [{ code: "en", label: "English" }],
+  pickerLanguages: [
+    { code: "en", label: "English" },
+    { code: "ja", label: "日本語" },
+    { code: "ko", label: "한국어" },
+    { code: "es", label: "Español" },
+  ],
+};
+
 export const DEFAULT_COLLECTOR_DATA: CollectorFixtureData = {
   channelName: "Demo Channel",
   periodLabel: "Last 28 days",
@@ -144,6 +172,11 @@ export interface MountStudioFixtureOptions {
   corruptLayout?: boolean;
   /** Collector metric/content payload (Phase 3). */
   collector?: CollectorFixtureData | false;
+  /**
+   * Subtitle editor payload (Phase 4).
+   * assumption: simulated structure only — calibrate on real device.
+   */
+  subtitles?: SubtitleFixtureData | false;
 }
 
 export interface StudioFixtureHandle {
@@ -152,6 +185,12 @@ export interface StudioFixtureHandle {
   setPage(page: FixturePage): void;
   /** Replace collector payload and re-render current page. */
   setCollectorData(data: CollectorFixtureData | false): void;
+  /** Replace subtitle payload and re-render current page. */
+  setSubtitleData(data: SubtitleFixtureData | false): void;
+  /** Test helper: language codes currently shown in the list. */
+  getSubtitleLanguageCodes(): string[];
+  /** Click counters for fail-closed assertions (P4-T4). */
+  clickCounts: { addLanguage: number; publish: number; option: number };
   destroy(): void;
 }
 
@@ -280,6 +319,101 @@ function appendContentBody(
 }
 
 /**
+ * assumption, calibrate on real device — minimal subtitle editor for unit tests.
+ */
+function appendSubtitlesBody(
+  main: HTMLElement,
+  data: SubtitleFixtureData,
+  clickCounts: StudioFixtureHandle["clickCounts"],
+  onLanguagesChanged: () => void,
+): void {
+  const note = document.createElement("div");
+  note.setAttribute("data-note", "assumption, calibrate on real device");
+  note.textContent = "Simulated SUBTITLES (assumption fixture)";
+  main.append(note);
+
+  if (data.omitLanguagesList) {
+    return;
+  }
+
+  const list = document.createElement("div");
+  list.setAttribute("data-luftballons-target", "subtitle.languages.list");
+  list.setAttribute("aria-label", "Subtitle languages");
+
+  const renderItems = (): void => {
+    while (list.firstChild) {
+      list.removeChild(list.firstChild);
+    }
+    for (const lang of data.existingLanguages) {
+      const item = document.createElement("div");
+      item.setAttribute("data-luftballons-subtitle-lang", lang.code);
+      item.setAttribute("data-language-code", lang.code);
+      item.textContent = lang.label;
+      list.append(item);
+    }
+  };
+  renderItems();
+  main.append(list);
+
+  if (data.omitControls) {
+    return;
+  }
+
+  const picker = document.createElement("div");
+  picker.setAttribute("data-luftballons-target", "subtitle.language.picker");
+  picker.setAttribute("aria-label", "Language picker");
+  picker.hidden = true;
+
+  const pickerLangs =
+    data.pickerLanguages ?? DEFAULT_SUBTITLE_DATA.pickerLanguages ?? [];
+  for (const lang of pickerLangs) {
+    const opt = document.createElement("button");
+    opt.type = "button";
+    opt.setAttribute("data-luftballons-subtitle-option", "true");
+    opt.setAttribute("data-language-code", lang.code);
+    opt.textContent = lang.label;
+    opt.addEventListener("click", () => {
+      clickCounts.option += 1;
+      const exists = data.existingLanguages.some(
+        (l) => l.code.toLowerCase() === lang.code.toLowerCase(),
+      );
+      if (!exists) {
+        data.existingLanguages.push({ ...lang });
+        renderItems();
+        onLanguagesChanged();
+      }
+      picker.hidden = true;
+    });
+    picker.append(opt);
+  }
+  main.append(picker);
+
+  const addBtn = document.createElement("button");
+  addBtn.type = "button";
+  addBtn.setAttribute("data-luftballons-target", "subtitle.add_language");
+  addBtn.setAttribute("aria-label", "Add language");
+  addBtn.setAttribute("role", "button");
+  addBtn.textContent = "Add language";
+  addBtn.addEventListener("click", () => {
+    clickCounts.addLanguage += 1;
+    picker.hidden = false;
+  });
+  main.append(addBtn);
+
+  const publishBtn = document.createElement("button");
+  publishBtn.type = "button";
+  publishBtn.setAttribute("data-luftballons-target", "subtitle.publish");
+  publishBtn.setAttribute("aria-label", "Publish");
+  publishBtn.setAttribute("role", "button");
+  publishBtn.textContent = "Publish";
+  publishBtn.addEventListener("click", () => {
+    clickCounts.publish += 1;
+    // assumption: publish commits pending adds already reflected in the list
+  });
+  main.append(publishBtn);
+}
+
+/**
  * Mount a simulated Studio shell into document.body.
  * Call destroy() in afterEach.
  */
@@ -293,6 +427,20 @@ export function mountStudioFixture(
     options.collector === false
       ? false
       : (options.collector ?? DEFAULT_COLLECTOR_DATA);
+  let subtitleData: SubtitleFixtureData | false =
+    options.subtitles === false
+      ? false
+      : (options.subtitles ??
+        (page === "SUBTITLES" || page === "VIDEO_DETAILS"
+          ? {
+              existingLanguages: [
+                ...(DEFAULT_SUBTITLE_DATA.existingLanguages ?? []),
+              ],
+              pickerLanguages: [
+                ...(DEFAULT_SUBTITLE_DATA.pickerLanguages ?? []),
+              ],
+            }
+          : DEFAULT_SUBTITLE_DATA));
 
   const root = document.createElement("div");
   root.setAttribute("data-luftballons-fixture", "simulated-studio");
@@ -302,6 +450,7 @@ export function mountStudioFixture(
   );
 
   let currentPage: FixturePage = page;
+  const clickCounts = { addLanguage: 0, publish: 0, option: 0 };
 
   const render = (current: FixturePage): void => {
     currentPage = current;
@@ -393,14 +542,22 @@ export function mountStudioFixture(
         appendAnalyticsBody(main, collectorData);
       } else if (current === "CONTENT") {
         appendContentBody(main, collectorData, contentVariant);
+      } else if (current === "SUBTITLES" && subtitleData) {
+        appendSubtitlesBody(main, subtitleData, clickCounts, () => {});
+      } else if (current === "VIDEO_DETAILS") {
+        main.textContent = "Simulated VIDEO_DETAILS";
       } else {
         main.textContent = `Simulated ${markerPage}`;
       }
+    } else if (current === "SUBTITLES" && subtitleData) {
+      appendSubtitlesBody(main, subtitleData, clickCounts, () => {});
     } else if (!collectorData) {
       if (current === "CONTENT" && contentVariant === "A") {
         const section = document.createElement("ytcp-video-section");
         section.textContent = "Simulated CONTENT";
         main.append(section);
+      } else if (current === "SUBTITLES" && subtitleData) {
+        appendSubtitlesBody(main, subtitleData, clickCounts, () => {});
       } else {
         main.textContent = `Simulated ${markerPage}`;
       }
@@ -420,6 +577,7 @@ export function mountStudioFixture(
   const handle: StudioFixtureHandle = {
     href: pageHref(page, contentVariant),
     contentVariant,
+    clickCounts,
     setPage(next: FixturePage) {
       handle.href = pageHref(next, contentVariant);
       render(next);
@@ -427,6 +585,16 @@ export function mountStudioFixture(
     setCollectorData(data) {
       collectorData = data;
       render(currentPage);
+    },
+    setSubtitleData(data) {
+      subtitleData = data;
+      render(currentPage);
+    },
+    getSubtitleLanguageCodes() {
+      if (!subtitleData) {
+        return [];
+      }
+      return subtitleData.existingLanguages.map((l) => l.code);
     },
     destroy() {
       root.remove();
@@ -458,8 +626,13 @@ export function mountConflictingLayoutFixture(): StudioFixtureHandle {
   return {
     href,
     contentVariant: "A",
+    clickCounts: { addLanguage: 0, publish: 0, option: 0 },
     setPage() {},
     setCollectorData() {},
+    setSubtitleData() {},
+    getSubtitleLanguageCodes() {
+      return [];
+    },
     destroy() {
       root.remove();
     },

@@ -4,17 +4,13 @@ import {
   ModuleAlreadyRegisteredError,
   ModuleNotFoundError,
 } from "../../src/runtime/errors.js";
-import { createSubtitleMultilangStub } from "../../src/modules/youtube-studio-stubs.js";
-import { immediateWait } from "../../src/modules/step-control.js";
 import { createLogger } from "../../src/services/logger.js";
 import {
   mountStudioFixture,
   type StudioFixtureHandle,
 } from "../fixtures/studio-simulated.js";
 import { createFixtureChannelModule } from "./channel-basic-test-utils.js";
-
-const fastSubtitleStub = () =>
-  createSubtitleMultilangStub({ wait: immediateWait });
+import { createFixtureSubtitleModule } from "./subtitle-multilang-test-utils.js";
 
 describe("ModuleRegistry", () => {
   let fixture: StudioFixtureHandle | undefined;
@@ -57,10 +53,10 @@ describe("ModuleRegistry", () => {
   });
 
   it("aggregates availability: studio available, www WRONG_SITE", async () => {
-    fixture = mountStudioFixture({ layout: "2026_V1" });
+    fixture = mountStudioFixture({ page: "VIDEO_DETAILS", layout: "2026_V1" });
     const registry = new ModuleRegistry();
     registry.register(createFixtureChannelModule(fixture));
-    registry.register(fastSubtitleStub());
+    registry.register(createFixtureSubtitleModule(fixture));
     const logger = createLogger({ minLevel: "ERROR", sink: () => {} });
 
     const studio = await registry.detectAll({
