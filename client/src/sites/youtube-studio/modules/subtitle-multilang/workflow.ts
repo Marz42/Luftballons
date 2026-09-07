@@ -12,7 +12,9 @@ import type { CancellableDomService } from "../../../../services/dom-service.js"
 import type { DomTarget } from "../../../../services/dom-service.js";
 import type { CancellableNavigationService } from "../../navigation.js";
 import { NavigationError } from "../../navigation.js";
+import { detectStudio } from "../../page-detector.js";
 import {
+  extractVideoIdFromHref,
   getSubtitleTarget,
   SUBTITLE_TARGETS,
 } from "../../selectors.js";
@@ -23,10 +25,14 @@ import {
   type SubtitleMultilangSummary,
 } from "./schema.js";
 
+export { extractVideoIdFromHref };
+
 export interface SubtitleWorkflowDeps {
   dom: CancellableDomService;
   navigation: CancellableNavigationService;
   getHref: () => string;
+  /** Document used for page detection rechecks (defaults to global document). */
+  detectDocument?: Document;
   /** Target languages chosen by the user for this run. */
   getTargetLanguages: () => SubtitleLanguage[];
   /**
@@ -50,18 +56,73 @@ function throwIfAborted(signal: AbortSignal): void {
 }
 
 /**
- * Extract video id from Studio URL …/video/{id}/…
- * Fail-closed: return null when absent (do not guess).
+ * Re-verify site + video identity + SUBTITLES page before any write.
+ * Fail-closed: any mismatch → stop (no clicks).
  */
-export function extractVideoIdFromHref(href: string): string | null {
+export function recheckVideoBinding(
+  deps: SubtitleWorkflowDeps,
+  expectedVideoId: string,
+): { ok: true } | { ok: false; code: "VIDEO_SWITCHED" | "NAV_BINDING_FAILED"; message: string } {
+  const href = deps.getHref();
+  let hostname = "";
   try {
-    const pathname = new URL(href, "https://studio.youtube.com").pathname;
-    const m = pathname.match(/\/video\/([^/]+)/i);
-    const id = m?.[1]?.trim();
-    return id && id.length > 0 ? id : null;
+    hostname = new URL(href, "https://studio.youtube.com").hostname;
   } catch {
-    return null;
+    return {
+      ok: false,
+      code: "NAV_BINDING_FAILED",
+      message: `Unparseable href=${href}`,
+    };
   }
+  if (hostname !== "studio.youtube.com") {
+    return {
+      ok: false,
+      code: "VIDEO_SWITCHED",
+      message: `Expected studio.youtube.com, got host=${hostname}`,
+    };
+  }
+
+  const currentId = extractVideoIdFromHref(href);
+  if (!currentId) {
+    return {
+      ok: false,
+      code: "NAV_BINDING_FAILED",
+      message: `No video id in href=${href} (channel-level or non-video surface)`,
+    };
+  }
+  if (currentId !== expectedVideoId) {
+    return {
+      ok: false,
+      code: "VIDEO_SWITCHED",
+      message: `Expected video=${expectedVideoId}, current=${currentId}`,
+    };
+  }
+
+  const doc = deps.detectDocument ?? document;
+  const detection = detectStudio({ href, document: doc });
+  if (detection.page !== "SUBTITLES") {
+    return {
+      ok: false,
+      code: "NAV_BINDING_FAILED",
+      message: `Expected SUBTITLES page, got page=${detection.page} (layout=${detection.layout})`,
+    };
+  }
+  return { ok: true };
+}
+
+function bindingFailureResult(
+  videoId: string,
+  check: { code: "VIDEO_SWITCHED" | "NAV_BINDING_FAILED"; message: string },
+  warnings: TaskWarning[],
+  outcomes: LanguageOutcome[],
+): TaskResult {
+  const line =
+    outcomes.length > 0 ? `; ${formatOutcomesSummary(outcomes)}` : "";
+  return {
+    status: "FAILED",
+    summary: `Subtitle multilang stopped: video binding failed (${check.code}). video=${videoId}${line}`,
+    warnings: [...warnings, { code: check.code, message: check.message }],
+  };
 }
 
 function languageCodeFromElement(el: Element): string | null {
@@ -273,7 +334,7 @@ export async function runSubtitleMultilangWorkflow(
     };
   }
 
-  // 2) navigate to subtitles
+  // 2) navigate to subtitles (video-scoped target via NavigationService)
   ctx.setProgress("Opening subtitles…", "RUNNING");
   throwIfAborted(ctx.signal);
   try {
@@ -294,6 +355,12 @@ export async function runSubtitleMultilangWorkflow(
       summary: `Failed to open subtitles page: ${detail}`,
       warnings: [{ code: "SUBTITLES_NAV_FAILED", message: detail }],
     };
+  }
+
+  // 2b) recheck: same video + SUBTITLES before any DOM write
+  const afterNav = recheckVideoBinding(deps, videoId);
+  if (!afterNav.ok) {
+    return bindingFailureResult(videoId, afterNav, warnings, []);
   }
 
   // 3) read existing languages
@@ -359,6 +426,13 @@ export async function runSubtitleMultilangWorkflow(
   ctx.setProgress("Adding missing languages…", "RUNNING");
   for (const lang of toAdd) {
     throwIfAborted(ctx.signal);
+    const beforeAdd = recheckVideoBinding(deps, videoId);
+    if (!beforeAdd.ok) {
+      return {
+        ...bindingFailureResult(videoId, beforeAdd, warnings, outcomes),
+        // keep outcomes so far in summary via warnings path
+      };
+    }
     try {
       await addLanguage(deps.dom, lang, ctx.signal);
       outcomes.push({
@@ -443,7 +517,12 @@ export async function runSubtitleMultilangWorkflow(
     return buildResult(summary, warnings);
   }
 
-  // 7) APPROVED → publish + verify
+  // 7) APPROVED → recheck binding, then publish + verify
+  const beforePublish = recheckVideoBinding(deps, videoId);
+  if (!beforePublish.ok) {
+    return bindingFailureResult(videoId, beforePublish, warnings, outcomes);
+  }
+
   ctx.setProgress("Publishing…", "RUNNING");
   try {
     await publishSubtitles(deps.dom, deps, ctx.signal);
@@ -464,6 +543,11 @@ export async function runSubtitleMultilangWorkflow(
   }
 
   throwIfAborted(ctx.signal);
+  const afterPublishBind = recheckVideoBinding(deps, videoId);
+  if (!afterPublishBind.ok) {
+    return bindingFailureResult(videoId, afterPublishBind, warnings, outcomes);
+  }
+
   const after = await readExistingLanguages(deps.dom);
   if (after === null) {
     warnings.push({

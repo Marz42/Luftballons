@@ -79,6 +79,41 @@ export function extractChannelIdFromHref(href: string): string | null {
 }
 
 /**
+ * Extract video id from Studio URL …/video/{id}/…
+ * Fail-closed: return null when absent (do not guess).
+ */
+export function extractVideoIdFromHref(href: string): string | null {
+  try {
+    const pathname = new URL(href, "https://studio.youtube.com").pathname;
+    const m = pathname.match(/\/video\/([^/]+)/i);
+    const id = m?.[1]?.trim();
+    return id && id.length > 0 ? id : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Video-scoped Subtitles / Translations nav target.
+ * assumption, calibrate on real device: prefer /video/{id}/translations
+ * (editor tab) over channel-level /channel/.../translations sidebar entry.
+ */
+export function subtitlesNavTarget(videoId: string): DomTarget {
+  const id = cssEscapeAttr(videoId);
+  return {
+    id: "nav.subtitles.video",
+    // assumption, calibrate on real device
+    selectorFallback: [
+      `a[href="/video/${id}/translations"]`,
+      `a[href*="/video/${id}/translations"]`,
+      `[data-luftballons-target="nav.subtitles.video"][href*="/video/${id}/"]`,
+    ],
+    matches: isActiveElement,
+    unique: true,
+  };
+}
+
+/**
  * Dashboard sidebar anchor — href path exact `/channel/{channelId}`
  * (variant A) or `/channel/{channelId}?theme=dark` (variant B).
  * Does not match the absolute www.youtube.com channel home outbound link.
@@ -126,7 +161,9 @@ export const STUDIO_TARGETS = {
   },
   "nav.subtitles": {
     id: "nav.subtitles",
-    // calibrated (P4 prep): translations entry in sidebar
+    // calibrated (P4 prep): channel-level translations entry in sidebar.
+    // WRITE paths must use subtitlesNavTarget(videoId) / navTargetFor("SUBTITLES")
+    // instead — channel-level must not bind publish to a video (P1-1).
     // future fallback (no aria-label on real device): ariaLabel: "Subtitles"
     selectorFallback: 'ytcp-navigation-drawer a[href*="/translations"]',
   },
@@ -256,7 +293,9 @@ export function getTarget(id: StudioTargetId): DomTarget {
 export interface NavTargetOptions {
   /** Prefer explicit channel id when constructing dashboard href selectors. */
   channelId?: string;
-  /** Fallback source for channel id extraction. */
+  /** Prefer explicit video id when constructing subtitles href selectors. */
+  videoId?: string;
+  /** Fallback source for channel / video id extraction. */
   href?: string;
 }
 
@@ -285,8 +324,22 @@ export function navTargetFor(
         // future: ariaLabel when real device evidence exists
         selectorFallback: 'a[href*="/video/"][href*="/edit"]',
       };
-    case "SUBTITLES":
-      return STUDIO_TARGETS["nav.subtitles"];
+    case "SUBTITLES": {
+      // Video-scoped only — channel-level /translations must not be used for
+      // WRITE paths (P1-1). Fail closed when video id is unknown.
+      const videoId =
+        options.videoId ??
+        (options.href ? extractVideoIdFromHref(options.href) : null);
+      if (videoId) {
+        return subtitlesNavTarget(videoId);
+      }
+      // No video id → return a never-matching target (NO_ANCHOR), not channel nav.
+      return {
+        id: "nav.subtitles.video",
+        selectorFallback: "a[data-luftballons-missing-video-subtitles-nav]",
+        unique: true,
+      };
+    }
   }
 }
 

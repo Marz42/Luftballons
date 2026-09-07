@@ -10,6 +10,7 @@ import {
   type StudioPage,
 } from "./page-detector.js";
 import {
+  extractVideoIdFromHref,
   navTargetFor,
   pageReadyTarget,
   type StudioTarget,
@@ -198,7 +199,13 @@ export function createNavigationService(
       historyStack.push(from);
     }
 
-    const navTarget = navTargetFor(target, { href: getHref() });
+    const href = getHref();
+    const navTarget = navTargetFor(target, {
+      href,
+      ...(target === "SUBTITLES"
+        ? { videoId: extractVideoIdFromHref(href) ?? undefined }
+        : {}),
+    });
     const el = await options.dom.find(navTarget);
     if (!el) {
       throw new NavigationError(

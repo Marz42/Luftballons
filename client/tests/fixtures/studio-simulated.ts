@@ -177,12 +177,22 @@ export interface MountStudioFixtureOptions {
    * assumption: simulated structure only — calibrate on real device.
    */
   subtitles?: SubtitleFixtureData | false;
+  /**
+   * When true, VIDEO_DETAILS has no video-scoped /video/{id}/translations
+   * tab — only the channel-level sidebar /translations entry remains (P1-1).
+   */
+  omitVideoSubtitlesTab?: boolean;
 }
 
 export interface StudioFixtureHandle {
   href: string;
   contentVariant: ContentUrlVariant;
   setPage(page: FixturePage): void;
+  /**
+   * Update href/location without remounting (P1-1 Human Gate video switch).
+   * Does not rewrite SPA page body — intentionally leaves DOM of prior video.
+   */
+  setHref(href: string): void;
   /** Replace collector payload and re-render current page. */
   setCollectorData(data: CollectorFixtureData | false): void;
   /** Replace subtitle payload and re-render current page. */
@@ -518,6 +528,20 @@ export function mountStudioFixture(
       deep.setAttribute("aria-current", "page");
       deep.textContent = "Video details";
       drawer.append(deep);
+
+      // assumption, calibrate on real device: video editor Subtitles/Translations tab
+      // (video-scoped — must not rely on channel-level /channel/.../translations).
+      if (!options.omitVideoSubtitlesTab) {
+        const subTab = document.createElement("a");
+        subTab.setAttribute("href", `/video/${VIDEO}/translations`);
+        subTab.setAttribute("data-luftballons-target", "nav.subtitles.video");
+        subTab.textContent = "Subtitles";
+        subTab.addEventListener("click", (ev) => {
+          ev.preventDefault();
+          handle.setPage("SUBTITLES");
+        });
+        drawer.append(subTab);
+      }
     }
 
     if (collectorData) {
@@ -582,6 +606,10 @@ export function mountStudioFixture(
       handle.href = pageHref(next, contentVariant);
       render(next);
     },
+    setHref(nextHref: string) {
+      handle.href = nextHref;
+      setLocationHref(nextHref);
+    },
     setCollectorData(data) {
       collectorData = data;
       render(currentPage);
@@ -628,6 +656,7 @@ export function mountConflictingLayoutFixture(): StudioFixtureHandle {
     contentVariant: "A",
     clickCounts: { addLanguage: 0, publish: 0, option: 0 },
     setPage() {},
+    setHref() {},
     setCollectorData() {},
     setSubtitleData() {},
     getSubtitleLanguageCodes() {

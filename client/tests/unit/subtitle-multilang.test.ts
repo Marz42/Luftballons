@@ -261,4 +261,77 @@ describe("youtube.subtitle.multilang (FT-011 / P4-T1…T5)", () => {
     expect(summary).toMatch(/English\(en\) SUCCESS/);
     expect(summary).toMatch(/日本語\(ja\) FAILED/);
   });
+
+  it("P1-1a: Human Gate wait switches video → publish recheck fails, no publish click", async () => {
+    fixture = mountStudioFixture({
+      page: "VIDEO_DETAILS",
+      layout: "2026_V1",
+      subtitles: {
+        existingLanguages: [],
+        pickerLanguages: [{ code: "ja", label: "日本語" }],
+      },
+    });
+    const gate = createDeferredHumanGate();
+    const mod = createFixtureSubtitleModule(fixture, {
+      initialLanguages: [{ code: "ja", label: "日本語" }],
+    });
+    const runner = makeRunner(mod, gate);
+
+    const taskId = await runner.start("youtube.subtitle.multilang");
+    await vi.waitFor(() => {
+      expect(runner.getState(taskId)).toBe("WAITING_HUMAN");
+    });
+    expect(fixture.clickCounts.publish).toBe(0);
+
+    // Switch to another video while Human Gate is open (DOM still video A editor).
+    fixture.setHref(
+      "https://studio.youtube.com/video/vid_other_999/translations",
+    );
+
+    gate.resolve("APPROVED");
+    await vi.waitFor(() => {
+      expect(runner.getState(taskId)).toBe("FAILED");
+    });
+
+    expect(fixture.clickCounts.publish).toBe(0);
+    const result = runner.getSnapshot(taskId).result;
+    expect(result?.warnings?.some((w) =>
+      w.code === "VIDEO_SWITCHED" || w.code === "NAV_BINDING_FAILED",
+    )).toBe(true);
+  });
+
+  it("P1-1b: channel-only subtitles nav → recheck/nav fails, no editor entry", async () => {
+    fixture = mountStudioFixture({
+      page: "VIDEO_DETAILS",
+      layout: "2026_V1",
+      omitVideoSubtitlesTab: true,
+      subtitles: {
+        existingLanguages: [],
+        pickerLanguages: [{ code: "ja", label: "日本語" }],
+      },
+    });
+    const mod = createFixtureSubtitleModule(fixture, {
+      initialLanguages: [{ code: "ja", label: "日本語" }],
+    });
+    const runner = makeRunner(mod, createAutoApproveGate());
+
+    const taskId = await runner.start("youtube.subtitle.multilang");
+    await vi.waitFor(() => {
+      expect(runner.getState(taskId)).toBe("FAILED");
+    });
+
+    expect(fixture.clickCounts.addLanguage).toBe(0);
+    expect(fixture.clickCounts.option).toBe(0);
+    expect(fixture.clickCounts.publish).toBe(0);
+    const result = runner.getSnapshot(taskId).result;
+    expect(
+      result?.warnings?.some((w) =>
+        [
+          "SUBTITLES_NAV_FAILED",
+          "VIDEO_SWITCHED",
+          "NAV_BINDING_FAILED",
+        ].includes(w.code),
+      ),
+    ).toBe(true);
+  });
 });

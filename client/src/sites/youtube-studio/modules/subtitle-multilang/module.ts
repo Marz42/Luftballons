@@ -148,6 +148,9 @@ export function createSubtitleMultilangModule(
           dom: options.dom,
           navigation: options.navigation,
           getHref,
+          ...(options.detectDocument !== undefined
+            ? { detectDocument: options.detectDocument }
+            : {}),
           getTargetLanguages: () => targetLanguages,
           ...(options.onPublishAttempt !== undefined
             ? { onPublishAttempt: options.onPublishAttempt }
