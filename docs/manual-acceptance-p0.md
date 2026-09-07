@@ -106,9 +106,12 @@ Automated unit tests cover registry, capability, task-runner state machine, one-
 
 | Test | Result | Tester | Date |
 |------|--------|--------|------|
-| P0-T1 | | | |
-| P0-T2 | | | |
-| P0-T3 | | | |
-| P0-T4 | | | |
+| P0-T1 | PASS | MARZ | 2026-09-07 |
+| P0-T2 | PASS | MARZ | 2026-09-07 |
+| P0-T3 | PASS | MARZ | 2026-09-07 |
+| P0-T4 | PASS | MARZ | 2026-09-07 |
+
+> 全部 PASS。P0-T3/T4 首次实测为 PARTIAL（demo 步骤瞬时完成、无法观察/取消），
+> 已修复（默认步进 600ms + 可中断等待，commit 672530f）后复测通过。
 
 Phase 0 success (IMPLEMENTATION §36): Runtime loads reliably; one-task rule works; cancel works; modules can register; no obvious Studio regression.
