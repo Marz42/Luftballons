@@ -295,12 +295,17 @@ export const PANEL_STYLES = `
 
 .lb-server-hint,
 .lb-server-id,
+.lb-server-config,
 .lb-server-msg,
 .lb-server-token-once {
   font-size: 12px;
   color: #5f6368;
   margin: 4px 0;
   word-break: break-word;
+}
+
+.lb-server-config {
+  white-space: pre-wrap;
 }
 
 .lb-server-token-once {

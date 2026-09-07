@@ -1,5 +1,5 @@
 /**
- * Server settings panel — Chinese copy, human-triggered register/sync only.
+ * Server settings panel — Chinese copy, human-triggered register/sync/config.
  */
 
 import type { Runtime } from "../runtime/runtime.js";
@@ -61,7 +61,14 @@ export function createServerSection(runtime: Runtime): ServerSectionHandle {
   for (const mode of ["MANUAL", "OFF", "ENABLED"] as NetworkMode[]) {
     const opt = document.createElement("option");
     opt.value = mode;
-    text(opt, mode === "MANUAL" ? "MANUAL（手动同步）" : mode === "OFF" ? "OFF（零网络）" : "ENABLED");
+    text(
+      opt,
+      mode === "MANUAL"
+        ? "MANUAL（手动同步）"
+        : mode === "OFF"
+          ? "OFF（零网络）"
+          : "ENABLED",
+    );
     modeSelect.append(opt);
   }
   modeLabel.append(modeCaption, modeSelect);
@@ -69,6 +76,10 @@ export function createServerSection(runtime: Runtime): ServerSectionHandle {
   const idBox = document.createElement("div");
   idBox.className = "lb-server-id";
   idBox.setAttribute("data-lb-installation-id", "true");
+
+  const configBox = document.createElement("div");
+  configBox.className = "lb-server-config";
+  configBox.setAttribute("data-lb-remote-config", "true");
 
   const msg = document.createElement("div");
   msg.className = "lb-server-msg";
@@ -92,7 +103,13 @@ export function createServerSection(runtime: Runtime): ServerSectionHandle {
   registerBtn.className = "lb-btn lb-btn-small";
   text(registerBtn, "注册新安装");
 
-  actions.append(saveBtn, registerBtn);
+  const refreshCfgBtn = document.createElement("button");
+  refreshCfgBtn.type = "button";
+  refreshCfgBtn.className = "lb-btn lb-btn-small";
+  refreshCfgBtn.setAttribute("data-lb-config-refresh", "true");
+  text(refreshCfgBtn, "立即刷新");
+
+  actions.append(saveBtn, registerBtn, refreshCfgBtn);
   root.append(
     title,
     hint,
@@ -100,6 +117,7 @@ export function createServerSection(runtime: Runtime): ServerSectionHandle {
     tokenLabel,
     modeLabel,
     idBox,
+    configBox,
     actions,
     msg,
     tokenOnce,
@@ -110,6 +128,35 @@ export function createServerSection(runtime: Runtime): ServerSectionHandle {
     msg.classList.toggle("lb-error", isError);
   };
 
+  const refreshConfigStatus = (): void => {
+    const network = runtime.network;
+    const applied = network?.getAppliedConfig();
+    const mode = network?.getNetworkMode() ?? runtime.config.networkMode;
+    refreshCfgBtn.disabled = mode === "OFF" || !network;
+
+    if (!applied) {
+      text(configBox, "远端配置：不可用");
+      return;
+    }
+    const lines = [
+      `远端配置：来源 ${applied.source}`,
+      applied.fetchedAt
+        ? `已缓存时间：${applied.fetchedAt}`
+        : "已缓存时间：—",
+      applied.revision !== undefined
+        ? `已应用 revision：${applied.revision}`
+        : "已应用 revision：—",
+      applied.lastRefresh
+        ? `上次刷新：${applied.lastRefresh.ok ? "成功" : "失败"} @ ${applied.lastRefresh.at}${
+            applied.lastRefresh.message
+              ? `（${applied.lastRefresh.message}）`
+              : ""
+          }`
+        : "上次刷新：尚未尝试",
+    ];
+    text(configBox, lines.join("\n"));
+  };
+
   const refresh = (): void => {
     const network = runtime.network;
     const settings = network?.getSettings();
@@ -118,6 +165,7 @@ export function createServerSection(runtime: Runtime): ServerSectionHandle {
     modeSelect.value = settings?.networkMode ?? runtime.config.networkMode;
     const identity = getOrCreateInstallation();
     text(idBox, `installation_id: ${identity.installationId}`);
+    refreshConfigStatus();
   };
 
   saveBtn.addEventListener("click", () => {
@@ -145,7 +193,6 @@ export function createServerSection(runtime: Runtime): ServerSectionHandle {
         setMsg("网络服务不可用", true);
         return;
       }
-      // Persist URL/mode first so register uses current form values.
       runtime.network.saveSettings({
         baseUrl: baseInput.value,
         networkMode: modeSelect.value as NetworkMode,
@@ -159,7 +206,6 @@ export function createServerSection(runtime: Runtime): ServerSectionHandle {
         setMsg(result.message ?? "注册失败", true);
         return;
       }
-      // Show token once in UI; do not rely on logs.
       tokenInput.value = result.token ?? "";
       tokenOnce.hidden = false;
       text(
@@ -169,6 +215,34 @@ export function createServerSection(runtime: Runtime): ServerSectionHandle {
       setMsg(result.message ?? "注册成功");
       refresh();
       tokenInput.value = result.token ?? "";
+    })();
+  });
+
+  refreshCfgBtn.addEventListener("click", () => {
+    void (async () => {
+      setMsg("");
+      if (!runtime.network) {
+        setMsg("网络服务不可用", true);
+        return;
+      }
+      // Persist form first so refresh uses current values.
+      runtime.network.saveSettings({
+        baseUrl: baseInput.value,
+        token: tokenInput.value,
+        networkMode: modeSelect.value as NetworkMode,
+      });
+      if (modeSelect.value === "OFF") {
+        setMsg("网络模式为 OFF，无法刷新远端配置", true);
+        refreshConfigStatus();
+        return;
+      }
+      const state = await runtime.network.refreshConfig();
+      refreshConfigStatus();
+      if (state.lastRefresh?.ok) {
+        setMsg("远端配置已刷新");
+      } else {
+        setMsg(state.lastRefresh?.message ?? "远端配置刷新失败", true);
+      }
     })();
   });
 

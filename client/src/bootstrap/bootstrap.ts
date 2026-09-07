@@ -12,6 +12,8 @@ import { JsonSink } from "../sinks/json-sink.js";
 import { RemoteSink } from "../sinks/remote-sink.js";
 import { createNetworkService } from "../services/network-service.js";
 import type { NetworkService } from "../services/network-service.js";
+import { resolveBootstrapConfig } from "../services/config-service.js";
+import { withRemoteConfigGate } from "../services/config-gate.js";
 import { createChannelBasicModule } from "../sites/youtube-studio/modules/channel-basic/module.js";
 import { createSubtitleMultilangModule } from "../sites/youtube-studio/modules/subtitle-multilang/module.js";
 import { detectStudio } from "../sites/youtube-studio/page-detector.js";
@@ -61,6 +63,12 @@ export interface BootstrapOptions {
   studioAdapter?: false | StudioAdapter;
   /** Override Human Gate (tests inject fakes). */
   humanGate?: HumanGateService | PanelHumanGate;
+  /**
+   * When true (default), attempt a single background config refresh after UI
+   * render if network mode is not OFF and credentials exist. Failures warn +
+   * continue — no retry storm (IMPLEMENTATION §25).
+   */
+  backgroundConfigRefresh?: boolean;
 }
 
 function defaultStudioAdapter(): StudioAdapter {
@@ -86,8 +94,10 @@ function defaultModules(adapter: StudioAdapter): LuftballonsModule[] {
 }
 
 /**
- * Bootstrap (SPEC §6): init Runtime → check host → register modules →
- * load bundled defaults → render UI. No eval, no remote JS.
+ * Bootstrap (SPEC §6 / IMPLEMENTATION §25):
+ * Bundled Defaults → Local Settings → Cached Remote → Init Runtime →
+ * Render UI → Optional Background Config Refresh.
+ * No eval, no remote JS. Remote config errors never block startup.
  */
 export async function bootstrap(
   options: BootstrapOptions = {},
@@ -101,6 +111,9 @@ export async function bootstrap(
     runtimeVersion: BUNDLED_DEFAULTS.runtimeVersion,
   });
 
+  // §25: Load Cached Remote Config before Initialize Runtime.
+  const initialApplied = resolveBootstrapConfig();
+
   let studioAdapter: StudioAdapter | undefined;
   if (options.studioAdapter === false) {
     studioAdapter = undefined;
@@ -110,8 +123,16 @@ export async function bootstrap(
     studioAdapter = defaultStudioAdapter();
   }
 
+  const network =
+    options.network ??
+    createNetworkService({
+      logger,
+      runtimeVersion: BUNDLED_DEFAULTS.runtimeVersion,
+      initialApplied,
+    });
+
   const registry = new ModuleRegistry();
-  const modules =
+  const rawModules =
     options.modules ??
     (studioAdapter
       ? defaultModules(studioAdapter)
@@ -122,8 +143,15 @@ export async function bootstrap(
           }),
         ]);
 
-  for (const module of modules) {
-    registry.register(module);
+  // Wrap detect with remote-config gate (interfaces unchanged).
+  for (const module of rawModules) {
+    registry.register(
+      withRemoteConfigGate(
+        module,
+        () => network.getAppliedConfig(),
+        BUNDLED_DEFAULTS.runtimeVersion,
+      ),
+    );
   }
 
   const collections =
@@ -131,13 +159,6 @@ export async function bootstrap(
   const csvSink = options.csvSink ?? new CsvSink();
   const jsonSink = options.jsonSink ?? new JsonSink();
 
-  // Human-triggered only — bootstrap never auto-fetches (SPEC §3.2).
-  const network =
-    options.network ??
-    createNetworkService({
-      logger,
-      runtimeVersion: BUNDLED_DEFAULTS.runtimeVersion,
-    });
   const remoteSink =
     options.remoteSink ??
     new RemoteSink({
@@ -184,9 +205,25 @@ export async function bootstrap(
     });
   }
 
+  // §25 Optional Background Config Refresh — single attempt, no retry storm.
+  const doBackground = options.backgroundConfigRefresh !== false;
+  if (doBackground && network.getNetworkMode() !== "OFF") {
+    const settings = network.getSettings();
+    if (settings.baseUrl && settings.token) {
+      void network.refreshConfig().then((state) => {
+        if (state.lastRefresh && !state.lastRefresh.ok) {
+          logger.warn("Background config refresh failed; continuing", {
+            message: state.lastRefresh.message,
+          });
+        }
+      });
+    }
+  }
+
   logger.info("Bootstrap complete", {
     moduleCount: registry.list().length,
     studioAdapter: studioAdapter !== undefined,
+    configSource: network.getAppliedConfig().source,
   });
 
   const result: BootstrapResult = { runtime, panel, humanGate };

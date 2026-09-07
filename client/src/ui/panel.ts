@@ -239,12 +239,21 @@ export async function mountLuftballonsPanel(
 
       const meta = document.createElement("div");
       meta.className = "lb-module-meta";
-      text(
-        meta,
-        row.availability.available
-          ? `available · ${row.id}`
-          : `unavailable (${row.availability.reason ?? "unknown"}) · ${row.id}`,
-      );
+      let availText: string;
+      if (row.availability.available) {
+        availText = `available · ${row.id}`;
+      } else if (row.availability.reason === "DISABLED") {
+        const detail =
+          typeof row.availability.metadata?.detail === "string"
+            ? row.availability.metadata.detail
+            : typeof row.availability.metadata?.cause === "string"
+              ? String(row.availability.metadata.cause)
+              : "远端禁用";
+        availText = `DISABLED（${detail}） · ${row.id}`;
+      } else {
+        availText = `unavailable (${row.availability.reason ?? "unknown"}) · ${row.id}`;
+      }
+      text(meta, availText);
 
       block.append(nameEl, meta);
 
