@@ -32,18 +32,19 @@ function content(more = false, dateType = "发布日期", sort = "descending") {
   </ytcp-video-section-content></ytcp-content-section>`;
 }
 
-async function collect(options: { views?: string; delta?: string; dates?: string; more?: boolean; dateType?: string; sort?: string } = {}) {
+async function collect(options: { views?: string; delta?: string; dates?: string; more?: boolean; dateType?: string; sort?: string; delayed?: boolean; empty?: boolean; cancel?: boolean } = {}) {
   document.body.innerHTML = dashboard;
   const saved: Collection<ChannelBasicData>[] = [];
+  const controller = new AbortController();
   const ctx = {
-    signal: new AbortController().signal,
+    signal: controller.signal,
     logger: { info() {} },
     collections: { async save(value: Collection<ChannelBasicData>) { saved.push(value); } },
   } as unknown as TaskContext;
   let page: StudioTarget = "DASHBOARD";
   const dom = createDomService();
   const result = await runChannelBasicCollector(ctx, {
-    dom, installationId: "demo-installation", collectionId: "demo-collection",
+    dom, installationId: "demo-installation", collectionId: "demo-collection", contentTimeoutMs: 200,
     getHref: () => "https://studio.youtube.com/channel/demo_channel",
     navigation: {
       currentPage: () => page,
@@ -52,6 +53,18 @@ async function collect(options: { views?: string; delta?: string; dates?: string
         document.body.innerHTML = target === "ANALYTICS"
           ? analytics(options.views, options.delta, options.dates)
           : content(options.more, options.dateType, options.sort);
+        if (target === "CONTENT" && (options.delayed || options.empty || options.cancel)) {
+          const row = document.querySelector("ytcp-video-row")!;
+          const parent = row.parentElement!;
+          row.remove();
+          if (options.delayed) {
+            const cell = row.querySelector(".tablecell-views")!;
+            cell.textContent = "";
+            setTimeout(() => parent.append(row), 20);
+            setTimeout(() => { cell.textContent = "2"; }, 40);
+          }
+          if (options.cancel) setTimeout(() => controller.abort(), 20);
+        }
       },
       async waitReady(target) {
         if (target === "DASHBOARD") expect(await dom.find(getTarget("page.dashboard.title"))).not.toBeNull();
@@ -65,6 +78,26 @@ async function collect(options: { views?: string; delta?: string; dates?: string
 
 afterEach(() => document.body.replaceChildren());
 describe("real DOM calibration", () => {
+  it("waits for rows and cells that arrive after the content shell", async () => {
+    const { data, result } = await collect({ delayed: true });
+    expect(data.recentVideos).toHaveLength(1);
+    expect(data.recentVideos[0]?.views).toBe(2);
+    expect(result.warnings?.some(w => w.code === "CONTENT_LOAD_TIMEOUT")).toBe(false);
+  });
+
+  it("preserves summary on content timeout", async () => {
+    const { data, result } = await collect({ empty: true });
+    expect(data.summary.views).toBe(0);
+    expect(data.recentVideos).toEqual([]);
+    expect(result.warnings?.some(w => w.code === "CONTENT_LOAD_TIMEOUT")).toBe(true);
+  });
+
+  it("cancels while waiting for content rows", async () => {
+    const { data, result } = await collect({ cancel: true });
+    expect(result.status).toBe("CANCELLED");
+    expect(data.summary.views).toBe(0);
+    expect(data.recentVideos).toEqual([]);
+  });
   it("retains zero, omits missing net change, ignores tooltip and 48-hour period", async () => {
     const { result, data } = await collect();
     expect(result.status).toBe("PARTIAL");

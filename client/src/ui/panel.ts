@@ -120,6 +120,7 @@ export async function mountLuftballonsPanel(
         `State: ${snapshot.state}`,
         progress ? `Progress: ${progress}` : "",
         snapshot.result ? `Result: ${snapshot.result.summary}` : "",
+        ...(snapshot.result?.warnings?.map(w => `Warning [${w.code}]: ${w.message}`) ?? []),
       ]
         .filter(Boolean)
         .join("\n"),

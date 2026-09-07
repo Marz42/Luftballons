@@ -13,7 +13,7 @@ export default defineConfig({
       userscript: {
         name: "Luftballons",
         namespace: "https://github.com/luftballons",
-        version: "0.1.0",
+        version: "0.1.1",
         description:
           "Local-first YouTube Studio automation runtime (Human-triggered, Fail-closed)",
         author: "Luftballons",

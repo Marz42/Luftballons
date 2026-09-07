@@ -140,7 +140,7 @@ describe("youtube.channel.basic collector (FT-009)", () => {
     const taskId = await runner.start("youtube.channel.basic");
     await vi.waitFor(() => {
       expect(runner.getState(taskId)).toBe("PARTIAL");
-    });
+    }, { timeout: 7_000 });
 
     const result = runner.getSnapshot(taskId).result;
     expect(
@@ -151,7 +151,7 @@ describe("youtube.channel.basic collector (FT-009)", () => {
     const data = stored?.data as ChannelBasicData;
     expect(data.summary.views).toBe(1000);
     expect(data.recentVideos).toEqual([]);
-  });
+  }, 10_000);
 
   it("P3-T5: cancel during Analytics→Content stops further nav; partial may remain", async () => {
     fixture = mountStudioFixture({

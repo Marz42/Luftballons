@@ -9,6 +9,7 @@ import type {
   TaskWarning,
 } from "../../../../runtime/types.js";
 import type { CancellableDomService } from "../../../../services/dom-service.js";
+import { DomTimeoutError } from "../../../../services/dom-service.js";
 import {
   LUFTBALLONS_SCHEMA_VERSION,
 } from "../../../../services/collection-service.js";
@@ -38,6 +39,7 @@ export interface ChannelBasicCollectorDeps {
   collectionId?: string;
   installationId?: string;
   collectorVersion?: number;
+  contentTimeoutMs?: number;
 }
 
 interface DraftMetrics {
@@ -433,7 +435,26 @@ export async function runChannelBasicCollector(
     await deps.navigation.waitReady("CONTENT", undefined, ctx.signal);
     throwIfAborted(ctx.signal);
 
-    const list = await deps.dom.find(getTarget("content.videos.list"));
+    // A SPA shell can be ready before its rows/cells arrive. Observe content
+    // mutations during this task; never conclude an empty list from one read.
+    let list: Element | null = null;
+    try {
+      list = await deps.dom.waitFor({
+        id: "content.videos.loaded",
+        selectorFallback: 'ytcp-video-section-content#video-list, [data-luftballons-target="content.videos.list"]',
+        unique: true,
+        matches: candidate => {
+          if (!isActiveElement(candidate)) return false;
+          const rows = Array.from(candidate.querySelectorAll(CONTENT_VIDEO_ROW_SELECTOR)).filter(isActiveElement);
+          return rows.length > 0 && rows.every(row => readCell(row, "title") !== null && readCell(row, "views") !== null);
+        },
+      }, deps.contentTimeoutMs ?? 5_000, ctx.signal);
+    } catch (error) {
+      if (!(error instanceof DomTimeoutError)) throw error;
+      warn(warnings, "CONTENT_LOAD_TIMEOUT", "Video rows did not finish loading before timeout; preserving available data");
+      list = await deps.dom.find(getTarget("content.videos.list"));
+    }
+    throwIfAborted(ctx.signal);
     if (!list) {
       warn(
         warnings,
