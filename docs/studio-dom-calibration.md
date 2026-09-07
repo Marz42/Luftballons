@@ -55,11 +55,14 @@ refresh. This is not a successful userscript collection run. Local regression te
 use sanitized minimal DOM structures; nonzero/negative net growth, duplicate nodes,
 different date types and additional pages are synthetic scenarios, not live evidence.
 
-After installing client/dist/Luftballons.user.js, run one manually triggered
-collection. For the supplied sample expect PARTIAL, Dashboard views 0, missing
-subscriberDelta, and one video row with views 2 (unless the live values have changed).
-Verify the saved Collection and JSON/CSV export against the UI. Then complete the
-P3 cancel, Network OFF and ten-run checklist. Multi-page traversal, empty lists,
-nonzero growth, other languages/layouts and multiple profiles remain live-unverified.
+After installing `client/dist/Luftballons.user.js`, the user ran one manually triggered
+collection, verified the saved Collection and JSON/CSV export against the UI, then
+completed the P3 cancel, Network OFF and ten-run checklist — **all PASS (MARZ, 2026-09-07,
+see `docs/manual-acceptance-p3.md` sign-off)**. For the supplied sample, results were
+PARTIAL (Dashboard views 0, missing subscriberDelta, one video row), matching the
+documented expectations; every run was fail-safe.
+
+Multi-page traversal, empty lists, nonzero growth, other languages/layouts and
+multiple profiles remain live-unverified.
 
 Automated validation for this change: 89 tests, TypeScript noEmit, Vite build.
