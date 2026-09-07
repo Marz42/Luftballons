@@ -1,6 +1,11 @@
 import type { ModuleRegistry } from "./module-registry.js";
 import type { TaskRunner } from "./task-runner.js";
 import type { Logger } from "./types.js";
+import type { CollectionService } from "../services/collection-service.js";
+import { NoopCollectionService } from "../services/collection-service.js";
+import type { Sink } from "../sinks/sink.js";
+import { CsvSink } from "../sinks/csv-sink.js";
+import { JsonSink } from "../sinks/json-sink.js";
 
 export interface BundledDefaults {
   runtimeVersion: string;
@@ -18,6 +23,9 @@ export interface Runtime {
   readonly taskRunner: TaskRunner;
   readonly logger: Logger;
   readonly config: BundledDefaults;
+  readonly collections: CollectionService;
+  readonly csvSink: Sink;
+  readonly jsonSink: Sink;
 }
 
 export function createRuntime(options: {
@@ -25,6 +33,9 @@ export function createRuntime(options: {
   taskRunner: TaskRunner;
   logger: Logger;
   config?: BundledDefaults;
+  collections?: CollectionService;
+  csvSink?: Sink;
+  jsonSink?: Sink;
 }): Runtime {
   const config = options.config ?? BUNDLED_DEFAULTS;
   return {
@@ -33,5 +44,8 @@ export function createRuntime(options: {
     taskRunner: options.taskRunner,
     logger: options.logger,
     config,
+    collections: options.collections ?? new NoopCollectionService(),
+    csvSink: options.csvSink ?? new CsvSink(),
+    jsonSink: options.jsonSink ?? new JsonSink(),
   };
 }

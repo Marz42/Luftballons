@@ -6,6 +6,13 @@ import type {
   TaskContext,
   TaskResult,
 } from "../runtime/types.js";
+import type { Collection } from "../schemas/collection.js";
+import type { ChannelBasicData } from "../schemas/channel-basic.js";
+import { getOrCreateInstallation } from "../schemas/installation.js";
+import {
+  createMockChannelBasicData,
+  LUFTBALLONS_SCHEMA_VERSION,
+} from "../services/collection-service.js";
 import {
   immediateWait,
   waitForAbortableStep,
@@ -18,6 +25,16 @@ export interface StubModuleOptions {
   wait?: (ms: number, signal: AbortSignal) => Promise<void>;
   stepDelayMs?: number;
   onStep?: (step: string, ctx: TaskContext) => void;
+}
+
+export interface ChannelBasicStubOptions extends StubModuleOptions {
+  /** Injected / mock channel payload (simulates page read). */
+  mockData?: ChannelBasicData;
+  /** Collection completeness — drives TaskResult status. */
+  collectionStatus?: "COMPLETE" | "PARTIAL";
+  installationId?: string;
+  collectionId?: string;
+  collectorVersion?: number;
 }
 
 function detectStudioSite(ctx: DetectContext): ModuleAvailability {
@@ -38,39 +55,36 @@ function isAbortError(error: unknown): boolean {
   );
 }
 
+function newId(prefix: string): string {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return crypto.randomUUID();
+  }
+  return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
 async function runSimulatedSteps(
   ctx: TaskContext,
   steps: string[],
   options: StubModuleOptions,
-): Promise<TaskResult> {
+): Promise<"OK" | "CANCELLED"> {
   const wait = options.wait ?? immediateWait;
   const delay = options.stepDelayMs ?? 0;
 
-  try {
-    for (const step of steps) {
-      if (ctx.signal.aborted) {
-        return { status: "CANCELLED", summary: "Cancelled by user" };
-      }
-      options.onStep?.(step, ctx);
-      ctx.logger.info(step);
-      await waitForAbortableStep(ctx.signal, delay, wait);
+  for (const step of steps) {
+    if (ctx.signal.aborted) {
+      return "CANCELLED";
     }
-    return {
-      status: "COMPLETED",
-      summary: "Simulated task completed",
-    };
-  } catch (error) {
-    if (ctx.signal.aborted || isAbortError(error)) {
-      return { status: "CANCELLED", summary: "Cancelled by user" };
-    }
-    throw error;
+    options.onStep?.(step, ctx);
+    ctx.logger.info(step);
+    await waitForAbortableStep(ctx.signal, delay, wait);
   }
+  return "OK";
 }
 
 const CHANNEL_CAPS: Capability[] = ["READ", "NAVIGATE", "LOCAL_EXPORT"];
 
 export function createChannelBasicStub(
-  options: StubModuleOptions = {},
+  options: ChannelBasicStubOptions = {},
 ): LuftballonsModule {
   return {
     id: "youtube.channel.basic",
@@ -79,18 +93,53 @@ export function createChannelBasicStub(
     site: "youtube-studio",
     capabilities: CHANNEL_CAPS,
     detect: async (ctx) => detectStudioSite(ctx),
-    run: async (ctx) =>
-      runSimulatedSteps(
-        ctx,
-        [
-          "Detect Studio",
-          "Verify channel",
-          "Read channel summary (simulated)",
-          "Read recent videos (simulated)",
-          "Normalize (simulated)",
-        ],
-        options,
-      ),
+    run: async (ctx): Promise<TaskResult> => {
+      try {
+        const stepResult = await runSimulatedSteps(
+          ctx,
+          [
+            "Detect Studio",
+            "Verify channel",
+            "Read channel summary (simulated)",
+            "Read recent videos (simulated)",
+            "Normalize (simulated)",
+          ],
+          options,
+        );
+        if (stepResult === "CANCELLED") {
+          return { status: "CANCELLED", summary: "Cancelled by user" };
+        }
+
+        const installationId =
+          options.installationId ??
+          getOrCreateInstallation().installationId;
+        const data = options.mockData ?? createMockChannelBasicData();
+        const status = options.collectionStatus ?? "COMPLETE";
+        const collection: Collection<ChannelBasicData> = {
+          collectionId: options.collectionId ?? newId("col"),
+          installationId,
+          collector: "youtube.channel.basic",
+          collectorVersion: options.collectorVersion ?? 1,
+          schemaVersion: LUFTBALLONS_SCHEMA_VERSION,
+          capturedAt: new Date().toISOString(),
+          status,
+          data,
+        };
+
+        await ctx.collections.save(collection);
+
+        return {
+          status: status === "PARTIAL" ? "PARTIAL" : "COMPLETED",
+          summary: `Saved channel collection (${data.recentVideos.length} videos)`,
+          collectionIds: [collection.collectionId],
+        };
+      } catch (error) {
+        if (ctx.signal.aborted || isAbortError(error)) {
+          return { status: "CANCELLED", summary: "Cancelled by user" };
+        }
+        throw error;
+      }
+    },
   };
 }
 
@@ -111,16 +160,31 @@ export function createSubtitleMultilangStub(
     site: "youtube-studio",
     capabilities: SUBTITLE_CAPS,
     detect: async (ctx) => detectStudioSite(ctx),
-    run: async (ctx) =>
-      runSimulatedSteps(
-        ctx,
-        [
-          "Detect current video (simulated)",
-          "Open subtitles (simulated)",
-          "Check existing languages (simulated)",
-          "Prepare languages (simulated)",
-        ],
-        options,
-      ),
+    run: async (ctx) => {
+      try {
+        const stepResult = await runSimulatedSteps(
+          ctx,
+          [
+            "Detect current video (simulated)",
+            "Open subtitles (simulated)",
+            "Check existing languages (simulated)",
+            "Prepare languages (simulated)",
+          ],
+          options,
+        );
+        if (stepResult === "CANCELLED") {
+          return { status: "CANCELLED", summary: "Cancelled by user" };
+        }
+        return {
+          status: "COMPLETED",
+          summary: "Simulated task completed",
+        };
+      } catch (error) {
+        if (ctx.signal.aborted || isAbortError(error)) {
+          return { status: "CANCELLED", summary: "Cancelled by user" };
+        }
+        throw error;
+      }
+    },
   };
 }

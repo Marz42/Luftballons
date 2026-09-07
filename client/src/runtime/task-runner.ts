@@ -15,11 +15,17 @@ import type {
   TaskSnapshot,
   TaskState,
 } from "./types.js";
+import {
+  NoopCollectionService,
+  type CollectionService,
+} from "../services/collection-service.js";
 
 export interface TaskRunnerOptions {
   registry: ModuleRegistry;
   logger: Logger;
   humanGate?: HumanGateService;
+  /** Defaults to NoopCollectionService for Phase 0 backward compatibility. */
+  collectionService?: CollectionService;
   createTaskId?: () => string;
   /**
    * Hostname used when modules re-check availability at start.
@@ -59,6 +65,7 @@ export class TaskRunner {
   private readonly registry: ModuleRegistry;
   private readonly logger: Logger;
   private readonly humanGate: HumanGateService;
+  private readonly collectionService: CollectionService;
   private readonly createTaskId: () => string;
   private readonly getLocation: () => { hostname: string; href: string };
   private readonly tasks = new Map<string, InternalTask>();
@@ -69,8 +76,15 @@ export class TaskRunner {
     this.registry = options.registry;
     this.logger = options.logger;
     this.humanGate = options.humanGate ?? new PlaceholderHumanGate();
+    this.collectionService =
+      options.collectionService ?? new NoopCollectionService();
     this.createTaskId = options.createTaskId ?? defaultTaskId;
     this.getLocation = options.getLocation ?? defaultLocation;
+  }
+
+  /** Exposed for UI / tests — same instance injected into TaskContext. */
+  getCollections(): CollectionService {
+    return this.collectionService;
   }
 
   subscribe(listener: TaskListener): () => void {
@@ -149,6 +163,7 @@ export class TaskRunner {
       logger: this.logger.child({ taskId, moduleId }),
       signal: controller.signal,
       humanGate: this.humanGate,
+      collections: this.collectionService,
     };
 
     void this.runModule(task, module.run.bind(module), ctx);

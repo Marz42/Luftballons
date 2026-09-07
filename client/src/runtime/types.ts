@@ -1,5 +1,6 @@
 import type { Capability } from "./capability.js";
 import type { CapabilityContext } from "./capability-manager.js";
+import type { CollectionService } from "../services/collection-service.js";
 
 export type LogLevel = "DEBUG" | "INFO" | "WARN" | "ERROR";
 
@@ -60,8 +61,8 @@ export interface HumanGateService {
 }
 
 /**
- * Phase 0 minimal TaskContext (IMPLEMENTATION §6 subset).
- * DOM / navigation / collections / config arrive in later phases.
+ * TaskContext (IMPLEMENTATION §6).
+ * Phase 1 adds collections. DOM / navigation / config arrive in later phases.
  */
 export interface TaskContext {
   taskId: string;
@@ -69,6 +70,7 @@ export interface TaskContext {
   logger: Logger;
   signal: AbortSignal;
   humanGate: HumanGateService;
+  collections: CollectionService;
 }
 
 export interface LuftballonsModule {
