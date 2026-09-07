@@ -4,6 +4,7 @@ import {
   createChannelBasicStub,
   createSubtitleMultilangStub,
 } from "../../src/modules/youtube-studio-stubs.js";
+import { immediateWait } from "../../src/modules/step-control.js";
 import type { PanelHandle } from "../../src/ui/panel.js";
 import {
   mountStudioFixture,
@@ -29,7 +30,10 @@ describe("Luftballons panel UI", () => {
     fixture = mountStudioFixture({ layout: "2026_V1" });
 
     const result = await bootstrap({
-      modules: [createChannelBasicStub(), createSubtitleMultilangStub()],
+      modules: [
+        createChannelBasicStub({ wait: immediateWait }),
+        createSubtitleMultilangStub({ wait: immediateWait }),
+      ],
     });
     panel = result.panel;
 
@@ -63,7 +67,7 @@ describe("Luftballons panel UI", () => {
     });
 
     const result = await bootstrap({
-      modules: [createChannelBasicStub()],
+      modules: [createChannelBasicStub({ wait: immediateWait })],
     });
     panel = result.panel;
     panel.open();
@@ -79,7 +83,7 @@ describe("Luftballons panel UI", () => {
     fixture = mountStudioFixture({ layout: "NONE" });
 
     const result = await bootstrap({
-      modules: [createChannelBasicStub()],
+      modules: [createChannelBasicStub({ wait: immediateWait })],
     });
     panel = result.panel;
     panel.open();

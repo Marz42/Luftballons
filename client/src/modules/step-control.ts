@@ -1,6 +1,7 @@
 /**
  * Abort-aware step wait for Phase 0 demo modules.
- * Tests inject a controllable clock via `wait` option — no fixed wall sleeps.
+ * Default wait is abortableDelay (real, cancellable wall delay for device demos).
+ * Tests inject immediateWait (or a controllable clock) — no fixed wall sleeps in CI.
  */
 export async function waitForAbortableStep(
   signal: AbortSignal,

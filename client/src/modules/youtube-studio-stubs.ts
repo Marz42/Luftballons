@@ -14,14 +14,18 @@ import {
   LUFTBALLONS_SCHEMA_VERSION,
 } from "../services/collection-service.js";
 import {
-  immediateWait,
+  abortableDelay,
   waitForAbortableStep,
 } from "./step-control.js";
 import { studioModuleAvailability } from "../sites/youtube-studio/page-detector.js";
 
+/** Default per-step delay for real-device demos (~5 steps ≈ 3s). */
+export const DEFAULT_STUB_STEP_DELAY_MS = 600;
+
 export interface StubModuleOptions {
-  /** Injected wait; tests should pass immediateWait to avoid real sleeps. */
+  /** Injected wait; tests must pass immediateWait (or async () => {}) to avoid real sleeps. */
   wait?: (ms: number, signal: AbortSignal) => Promise<void>;
+  /** Per-step delay; default 600ms for visible RUNNING / Cancel on device. */
   stepDelayMs?: number;
   onStep?: (step: string, ctx: TaskContext) => void;
   /** Override document for layout detect (tests). Defaults to global document. */
@@ -68,8 +72,8 @@ async function runSimulatedSteps(
   steps: string[],
   options: StubModuleOptions,
 ): Promise<"OK" | "CANCELLED"> {
-  const wait = options.wait ?? immediateWait;
-  const delay = options.stepDelayMs ?? 0;
+  const wait = options.wait ?? abortableDelay;
+  const delay = options.stepDelayMs ?? DEFAULT_STUB_STEP_DELAY_MS;
 
   for (const step of steps) {
     if (ctx.signal.aborted) {

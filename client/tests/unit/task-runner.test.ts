@@ -6,6 +6,7 @@ import {
   TaskBusyError,
 } from "../../src/runtime/errors.js";
 import { createChannelBasicStub } from "../../src/modules/youtube-studio-stubs.js";
+import { immediateWait } from "../../src/modules/step-control.js";
 import { createLogger } from "../../src/services/logger.js";
 import type { LuftballonsModule, TaskContext } from "../../src/runtime/types.js";
 import {
@@ -80,7 +81,7 @@ describe("TaskRunner", () => {
     });
 
     const blocking: LuftballonsModule = {
-      ...createChannelBasicStub(),
+      ...createChannelBasicStub({ wait: immediateWait }),
       run: async (ctx: TaskContext) => {
         await gate;
         if (ctx.signal.aborted) {
@@ -118,7 +119,7 @@ describe("TaskRunner", () => {
     });
 
     const module: LuftballonsModule = {
-      ...createChannelBasicStub(),
+      ...createChannelBasicStub({ wait: immediateWait }),
       run: async (ctx) => {
         seen.push("step-1");
         await firstStep;
@@ -178,7 +179,10 @@ describe("TaskRunner", () => {
   });
 
   it("refuses unavailable modules on wrong site", async () => {
-    const runner = makeRunner(createChannelBasicStub(), "www.youtube.com");
+    const runner = makeRunner(
+      createChannelBasicStub({ wait: immediateWait }),
+      "www.youtube.com",
+    );
     await expect(runner.start("youtube.channel.basic")).rejects.toBeInstanceOf(
       ModuleUnavailableError,
     );
@@ -186,7 +190,7 @@ describe("TaskRunner", () => {
 
   it("refuses modules when layout is UNKNOWN", async () => {
     fixture = mountStudioFixture({ layout: "NONE" });
-    const runner = makeRunner(createChannelBasicStub());
+    const runner = makeRunner(createChannelBasicStub({ wait: immediateWait }));
     await expect(runner.start("youtube.channel.basic")).rejects.toBeInstanceOf(
       ModuleUnavailableError,
     );
@@ -195,7 +199,7 @@ describe("TaskRunner", () => {
   it("transitions to FAILED when run throws", async () => {
     fixture = mountStudioFixture({ layout: "2026_V1" });
     const module: LuftballonsModule = {
-      ...createChannelBasicStub(),
+      ...createChannelBasicStub({ wait: immediateWait }),
       run: async () => {
         throw new Error("boom");
       },

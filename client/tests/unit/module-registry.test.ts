@@ -8,11 +8,16 @@ import {
   createChannelBasicStub,
   createSubtitleMultilangStub,
 } from "../../src/modules/youtube-studio-stubs.js";
+import { immediateWait } from "../../src/modules/step-control.js";
 import { createLogger } from "../../src/services/logger.js";
 import {
   mountStudioFixture,
   type StudioFixtureHandle,
 } from "../fixtures/studio-simulated.js";
+
+const fastStub = () => createChannelBasicStub({ wait: immediateWait });
+const fastSubtitleStub = () =>
+  createSubtitleMultilangStub({ wait: immediateWait });
 
 describe("ModuleRegistry", () => {
   let fixture: StudioFixtureHandle | undefined;
@@ -25,7 +30,7 @@ describe("ModuleRegistry", () => {
 
   it("registers and looks up modules by id", () => {
     const registry = new ModuleRegistry();
-    const channel = createChannelBasicStub();
+    const channel = fastStub();
     registry.register(channel);
     expect(registry.get("youtube.channel.basic")?.id).toBe(
       "youtube.channel.basic",
@@ -35,15 +40,15 @@ describe("ModuleRegistry", () => {
 
   it("rejects duplicate registration", () => {
     const registry = new ModuleRegistry();
-    registry.register(createChannelBasicStub());
-    expect(() => registry.register(createChannelBasicStub())).toThrow(
+    registry.register(fastStub());
+    expect(() => registry.register(fastStub())).toThrow(
       ModuleAlreadyRegisteredError,
     );
   });
 
   it("unregisters and require throws when missing", () => {
     const registry = new ModuleRegistry();
-    registry.register(createChannelBasicStub());
+    registry.register(fastStub());
     registry.unregister("youtube.channel.basic");
     expect(registry.get("youtube.channel.basic")).toBeUndefined();
     expect(() => registry.require("youtube.channel.basic")).toThrow(
@@ -54,8 +59,8 @@ describe("ModuleRegistry", () => {
   it("aggregates availability: studio available, www WRONG_SITE", async () => {
     fixture = mountStudioFixture({ layout: "2026_V1" });
     const registry = new ModuleRegistry();
-    registry.register(createChannelBasicStub());
-    registry.register(createSubtitleMultilangStub());
+    registry.register(fastStub());
+    registry.register(fastSubtitleStub());
     const logger = createLogger({ minLevel: "ERROR", sink: () => {} });
 
     const studio = await registry.detectAll({
@@ -80,7 +85,7 @@ describe("ModuleRegistry", () => {
   it("marks studio modules unavailable on UNKNOWN layout", async () => {
     fixture = mountStudioFixture({ layout: "NONE" });
     const registry = new ModuleRegistry();
-    registry.register(createChannelBasicStub());
+    registry.register(fastStub());
     const logger = createLogger({ minLevel: "ERROR", sink: () => {} });
     const entries = await registry.detectAll({
       hostname: "studio.youtube.com",
