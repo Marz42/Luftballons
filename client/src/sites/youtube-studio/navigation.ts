@@ -137,17 +137,26 @@ export function createNavigationService(
     const deadline = Date.now() + timeoutMs;
 
     // State wait: page feature appears + postcondition (no fixed sleep sync).
-    try {
-      await options.dom.waitFor(target, timeoutMs, signal);
-    } catch (err) {
-      throwIfAborted(signal);
-      if (err instanceof DomTimeoutError) {
-        throw new NavigationError(
-          "TIMEOUT",
-          `waitReady timed out waiting for ${page}`,
-        );
+    // Optional targets (e.g. CONTENT on variant B without ytcp-video-section):
+    // if absent, skip DOM wait and rely on URL postcondition.
+    const existing = await options.dom.find(target);
+    if (!existing) {
+      if (target.optional) {
+        // DOM feature unavailable — fall through to postcondition polling.
+      } else {
+        try {
+          await options.dom.waitFor(target, timeoutMs, signal);
+        } catch (err) {
+          throwIfAborted(signal);
+          if (err instanceof DomTimeoutError) {
+            throw new NavigationError(
+              "TIMEOUT",
+              `waitReady timed out waiting for ${page}`,
+            );
+          }
+          throw err;
+        }
       }
-      throw err;
     }
 
     throwIfAborted(signal);
@@ -189,7 +198,7 @@ export function createNavigationService(
       historyStack.push(from);
     }
 
-    const navTarget = navTargetFor(target);
+    const navTarget = navTargetFor(target, { href: getHref() });
     const el = await options.dom.find(navTarget);
     if (!el) {
       throw new NavigationError(
