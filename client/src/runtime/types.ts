@@ -57,12 +57,31 @@ export interface HumanGateAction {
 }
 
 export interface HumanGateService {
-  request(action: HumanGateAction): Promise<"APPROVED" | "REJECTED">;
+  /**
+   * Prompt the human for WRITE_COMMIT confirmation.
+   * Optional AbortSignal: on abort, must resolve "REJECTED" and dismiss UI
+   * (additive 2nd param; IMPLEMENTATION §12 signature remains action-first).
+   */
+  request(
+    action: HumanGateAction,
+    signal?: AbortSignal,
+  ): Promise<"APPROVED" | "REJECTED">;
 }
+
+export type TaskState =
+  | "IDLE"
+  | "RUNNING"
+  | "WAITING"
+  | "WAITING_HUMAN"
+  | "COMPLETED"
+  | "PARTIAL"
+  | "FAILED"
+  | "CANCELLED";
 
 /**
  * TaskContext (IMPLEMENTATION §6).
  * Phase 1 adds collections. DOM / navigation / config arrive in later phases.
+ * setProgress is additive so Action modules can enter WAITING_HUMAN (Phase 4).
  */
 export interface TaskContext {
   taskId: string;
@@ -71,6 +90,8 @@ export interface TaskContext {
   signal: AbortSignal;
   humanGate: HumanGateService;
   collections: CollectionService;
+  /** Update task progress / state (e.g. WAITING_HUMAN around Human Gate). */
+  setProgress(message: string, state?: TaskState): void;
 }
 
 export interface LuftballonsModule {
@@ -83,16 +104,6 @@ export interface LuftballonsModule {
   run(ctx: TaskContext): Promise<TaskResult>;
   cleanup?(): Promise<void>;
 }
-
-export type TaskState =
-  | "IDLE"
-  | "RUNNING"
-  | "WAITING"
-  | "WAITING_HUMAN"
-  | "COMPLETED"
-  | "PARTIAL"
-  | "FAILED"
-  | "CANCELLED";
 
 export interface TaskSnapshot {
   taskId: string;

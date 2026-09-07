@@ -164,6 +164,9 @@ export class TaskRunner {
       signal: controller.signal,
       humanGate: this.humanGate,
       collections: this.collectionService,
+      setProgress: (message, state = "RUNNING") => {
+        this.setProgress(taskId, message, state);
+      },
     };
 
     void this.runModule(task, module.run.bind(module), ctx);
