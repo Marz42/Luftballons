@@ -272,4 +272,42 @@ export const PANEL_STYLES = `
   padding: 2px 6px;
   width: 72px;
 }
+
+.lb-field {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 6px 0;
+  font-size: 12px;
+  color: #5f6368;
+}
+
+.lb-field input,
+.lb-field select {
+  font: inherit;
+  font-size: 12px;
+  color: #202124;
+  border: 1px solid #dadce0;
+  border-radius: 4px;
+  padding: 4px 8px;
+  width: 100%;
+}
+
+.lb-server-hint,
+.lb-server-id,
+.lb-server-msg,
+.lb-server-token-once {
+  font-size: 12px;
+  color: #5f6368;
+  margin: 4px 0;
+  word-break: break-word;
+}
+
+.lb-server-token-once {
+  color: #202124;
+  background: #f8f9fa;
+  border: 1px solid #dadce0;
+  border-radius: 4px;
+  padding: 6px 8px;
+}
 `;

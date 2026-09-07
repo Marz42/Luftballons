@@ -35,3 +35,17 @@ Install that file in Tampermonkey (Chrome / Chromium). Match hosts are only:
 
 - `https://www.youtube.com/*`
 - `https://studio.youtube.com/*`
+
+## Server (Phase 5a — optional)
+
+Local FastAPI + SQLite for Installation register + Collection ingest. Config/Admin/Errors are Phase 5b.
+
+```bash
+cd server
+python3 -m venv .venv
+.venv/bin/pip install -e '.[dev]'
+.venv/bin/pytest -q
+LUFTBALLONS_DB_PATH=./data/luftballons.db .venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000
+```
+
+Or: `scripts/dev-server.sh` (requires the venv above).

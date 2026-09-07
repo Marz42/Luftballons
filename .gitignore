@@ -21,4 +21,3 @@ server/data/*.db
 server/tests/_tmp_test.db
 *.db
 !server/data/.gitkeep
-server/*.egg-info/

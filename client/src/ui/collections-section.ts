@@ -47,6 +47,11 @@ export function createCollectionsSection(
 
   const setError = (message: string): void => {
     text(errorBox, message);
+    if (message) {
+      errorBox.classList.add("lb-error");
+    } else {
+      errorBox.classList.remove("lb-error");
+    }
   };
 
   const renderRows = (rows: CollectionSummary[]): void => {
@@ -111,6 +116,39 @@ export function createCollectionsSection(
         })();
       });
 
+      const syncBtn = document.createElement("button");
+      syncBtn.type = "button";
+      syncBtn.className = "lb-btn lb-btn-small";
+      text(syncBtn, "同步到服务器");
+      syncBtn.setAttribute("data-lb-sync", "true");
+      syncBtn.addEventListener("click", () => {
+        void (async () => {
+          setError("");
+          if (!runtime.network) {
+            setError("网络服务不可用");
+            return;
+          }
+          const collection = await runtime.collections.get(row.collectionId);
+          if (!collection) {
+            setError("Collection not found");
+            return;
+          }
+          const result = await runtime.network.sendCollection(collection);
+          // Local IndexedDB is never deleted on sync success or failure (MVP).
+          if (result.status === "FAILED") {
+            setError(result.message ?? "同步失败（本地数据已保留）");
+            return;
+          }
+          text(
+            errorBox,
+            result.alreadyIngested
+              ? "服务器已有此数据（幂等），本地已保留"
+              : "同步成功，本地已保留",
+          );
+          errorBox.classList.remove("lb-error");
+        })();
+      });
+
       const deleteBtn = document.createElement("button");
       deleteBtn.type = "button";
       deleteBtn.className = "lb-btn lb-btn-small lb-btn-cancel";
@@ -123,7 +161,7 @@ export function createCollectionsSection(
         })();
       });
 
-      actions.append(exportCsv, exportJson, deleteBtn);
+      actions.append(exportCsv, exportJson, syncBtn, deleteBtn);
       block.append(meta, actions);
       fragment.appendChild(block);
     }

@@ -108,9 +108,10 @@ describe("Collections UI (P1-T4)", () => {
     expect(empty?.hidden).toBe(true);
 
     const first = items[0];
-    expect(first?.querySelectorAll("button").length).toBe(3);
+    expect(first?.querySelectorAll("button").length).toBe(4);
     expect(first?.textContent).toMatch(/导出 CSV/);
     expect(first?.textContent).toMatch(/导出 JSON/);
+    expect(first?.textContent).toMatch(/同步到服务器/);
     expect(first?.textContent).toMatch(/删除/);
   });
 

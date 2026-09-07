@@ -7,6 +7,7 @@ import type {
 import { TaskBusyError } from "../runtime/errors.js";
 import { PANEL_STYLES } from "./styles.js";
 import { createCollectionsSection } from "./collections-section.js";
+import { createServerSection } from "./server-section.js";
 import type { PanelHumanGate } from "./human-gate.js";
 import {
   isSubtitleControls,
@@ -97,6 +98,7 @@ export async function mountLuftballonsPanel(
   cancelBtn.disabled = true;
 
   const collections = createCollectionsSection(runtime);
+  const server = createServerSection(runtime);
 
   panel.append(
     title,
@@ -108,6 +110,7 @@ export async function mountLuftballonsPanel(
     cancelBtn,
     errorBox,
     collections.root,
+    server.root,
   );
   root.append(toggle, panel);
   shadow.appendChild(root);
@@ -317,6 +320,7 @@ export async function mountLuftballonsPanel(
     if (open) {
       void refreshAvailability();
       void collections.refresh();
+      server.refresh();
     }
   });
 
@@ -354,6 +358,7 @@ export async function mountLuftballonsPanel(
       text(toggle, "Luftballons ▾");
       void refreshAvailability();
       void collections.refresh();
+      server.refresh();
     },
     close(): void {
       open = false;
