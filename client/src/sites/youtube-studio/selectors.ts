@@ -2,8 +2,8 @@
  * Centralized DomTargets + layout signatures for YouTube Studio.
  * IMPLEMENTATION §45: selectors centralized; §11 layout versions.
  *
- * DOM selectors that claim Studio structure are assumptions until
- * calibrated on a real logged-in device. See docs/manual-acceptance-p2.md.
+ * Calibrated entries cite real-device DOM evidence (P2 calibration batch).
+ * Uncalibrated collection / page-ready fields remain assumption-marked.
  */
 
 import type { DomTarget } from "../../services/dom-service.js";
@@ -31,31 +31,77 @@ export interface LayoutSignature {
   matches(ctx: LayoutFeatureContext): boolean;
 }
 
+function cssEscapeAttr(value: string): string {
+  if (typeof CSS !== "undefined" && typeof CSS.escape === "function") {
+    return CSS.escape(value);
+  }
+  return value.replace(/["\\]/g, "\\$&");
+}
+
+/**
+ * Extract channel id from a Studio href (/channel/{id}/…).
+ */
+export function extractChannelIdFromHref(href: string): string | null {
+  try {
+    const pathname = new URL(href, "https://studio.youtube.com").pathname;
+    const m = pathname.match(/^\/channel\/([^/]+)/i);
+    return m?.[1] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Dashboard sidebar anchor — href path exact `/channel/{channelId}`
+ * (variant A) or `/channel/{channelId}?theme=dark` (variant B).
+ * Does not match the absolute www.youtube.com channel home outbound link.
+ */
+export function dashboardNavTarget(channelId: string): DomTarget {
+  const id = cssEscapeAttr(channelId);
+  return {
+    id: "nav.dashboard",
+    // future fallback (real Studio sidebar items have no aria-label):
+    // ariaLabel: "Dashboard",
+    selectorFallback: [
+      `ytcp-navigation-drawer a[href="/channel/${id}"]`,
+      `ytcp-navigation-drawer a[href="/channel/${id}?theme=dark"]`,
+    ],
+  };
+}
+
 /**
  * DomTargets keyed by logical id. `id` is the registry key, not an HTML id.
  */
 export const STUDIO_TARGETS = {
   "nav.dashboard": {
     id: "nav.dashboard",
-    // assumption, calibrate on real device: Studio sidebar Dashboard item
-    ariaLabel: "Dashboard",
-    role: "link",
-    selectorFallback:
-      'ytcp-navigation-drawer a[href*="/channel/"][data-nav="dashboard"]',
+    // Prefer dashboardNavTarget(channelId) at runtime (exact href path).
+    // future fallback (real device has no aria-label): ariaLabel: "Dashboard"
+    selectorFallback: [
+      'ytcp-navigation-drawer a[href="/channel/__runtime_channel_id__"]',
+    ],
   },
   "nav.analytics": {
     id: "nav.analytics",
-    // assumption, calibrate on real device
-    ariaLabel: "Analytics",
-    role: "link",
-    selectorFallback: 'ytcp-navigation-drawer a[href*="/analytics"]',
+    // calibrated: both variants use …/analytics/tab-overview…
+    // future fallback (no aria-label on real device): ariaLabel: "Analytics"
+    selectorFallback:
+      'ytcp-navigation-drawer a[href*="/analytics/tab-overview"]',
   },
   "nav.content": {
     id: "nav.content",
-    // assumption, calibrate on real device: Content tab often labeled "Content"
-    ariaLabel: "Content",
-    role: "link",
-    selectorFallback: 'ytcp-navigation-drawer a[href*="/videos"]',
+    // calibrated dual variant: /videos/upload (A) or /content (B)
+    // future fallback (no aria-label on real device): ariaLabel: "Content"
+    selectorFallback: [
+      'ytcp-navigation-drawer a[href*="/videos/upload"]',
+      'ytcp-navigation-drawer a[href*="/content"]',
+    ],
+  },
+  "nav.subtitles": {
+    id: "nav.subtitles",
+    // calibrated (P4 prep): translations entry in sidebar
+    // future fallback (no aria-label on real device): ariaLabel: "Subtitles"
+    selectorFallback: 'ytcp-navigation-drawer a[href*="/translations"]',
   },
   "page.dashboard.title": {
     id: "page.dashboard.title",
@@ -71,9 +117,10 @@ export const STUDIO_TARGETS = {
   },
   "page.content.title": {
     id: "page.content.title",
-    // assumption, calibrate on real device
-    ariaLabel: "Channel content",
-    selectorFallback: 'main[data-page="CONTENT"]',
+    // calibrated: variant A has ytcp-video-section in main; variant B
+    // container unreported — fall through to main#main / main (optional).
+    selectorFallback: ["main ytcp-video-section", "main#main", "main"],
+    optional: true,
   },
   "page.video_details.title": {
     id: "page.video_details.title",
@@ -89,17 +136,18 @@ export const STUDIO_TARGETS = {
   },
   "layout.2026_v1.root": {
     id: "layout.2026_v1.root",
-    // assumption, calibrate on real device: ytcp-app + navigation drawer
-    // Fixtures set data-luftballons-layout="2026_V1" for deterministic tests.
-    selectorFallback: 'ytcp-app[data-luftballons-layout="2026_V1"]',
+    // calibrated: real shell is ytcp-app + ytcp-navigation-drawer
+    // (tp-yt-app-drawer does not exist on observed devices)
+    selectorFallback: "ytcp-app",
   },
   "layout.2026_v2.root": {
     id: "layout.2026_v2.root",
-    // assumption, calibrate on real device: alternate A/B shell marker
-    selectorFallback: 'ytcp-app[data-luftballons-layout="2026_V2"]',
+    // 待真机证据 — signature matches() is always false until then
+    selectorFallback: "ytcp-app-v2-pending-evidence",
   },
 
   // --- Channel basic collector anchors (FT-009) ---
+  // Uncalibrated collection fields — keep assumption markers; do not invent.
   "channel.name": {
     id: "channel.name",
     // assumption, calibrate on real device: channel title in Studio chrome
@@ -164,10 +212,27 @@ export function getTarget(id: StudioTargetId): DomTarget {
   return STUDIO_TARGETS[id];
 }
 
-export function navTargetFor(page: StudioTarget): DomTarget {
+export interface NavTargetOptions {
+  /** Prefer explicit channel id when constructing dashboard href selectors. */
+  channelId?: string;
+  /** Fallback source for channel id extraction. */
+  href?: string;
+}
+
+export function navTargetFor(
+  page: StudioTarget,
+  options: NavTargetOptions = {},
+): DomTarget {
   switch (page) {
-    case "DASHBOARD":
+    case "DASHBOARD": {
+      const channelId =
+        options.channelId ??
+        (options.href ? extractChannelIdFromHref(options.href) : null);
+      if (channelId) {
+        return dashboardNavTarget(channelId);
+      }
       return STUDIO_TARGETS["nav.dashboard"];
+    }
     case "ANALYTICS":
       return STUDIO_TARGETS["nav.analytics"];
     case "CONTENT":
@@ -176,17 +241,11 @@ export function navTargetFor(page: StudioTarget): DomTarget {
       // assumption, calibrate on real device: details usually from content list
       return {
         id: "nav.video_details",
-        ariaLabel: "Video details",
-        role: "link",
+        // future: ariaLabel when real device evidence exists
         selectorFallback: 'a[href*="/video/"][href*="/edit"]',
       };
     case "SUBTITLES":
-      return {
-        id: "nav.subtitles",
-        ariaLabel: "Subtitles",
-        role: "link",
-        selectorFallback: 'a[href*="/translations"]',
-      };
+      return STUDIO_TARGETS["nav.subtitles"];
   }
 }
 
@@ -212,24 +271,9 @@ export const LAYOUT_SIGNATURES: LayoutSignature[] = [
   {
     layout: "2026_V1",
     matches(ctx) {
-      const v1 = ctx.document.querySelector(
-        'ytcp-app[data-luftballons-layout="2026_V1"]',
-      );
-      const v2 = ctx.document.querySelector(
-        'ytcp-app[data-luftballons-layout="2026_V2"]',
-      );
-      // Dual markers → neither claims a unique match (detector → UNKNOWN).
-      if (v1 && v2) {
-        return false;
-      }
-      if (v1) {
-        return true;
-      }
-      if (v2) {
-        return false;
-      }
-      // assumption, calibrate on real device: classic Studio shell
-      // (ytcp-app + ytcp-navigation-drawer) without A/B marker.
+      // calibrated: real device has ytcp-app + ytcp-navigation-drawer.
+      // tp-yt-app-drawer is absent and must not participate in matching.
+      // data-luftballons-layout is fixture-only and must not be required.
       const app = ctx.document.querySelector("ytcp-app");
       const drawer = ctx.document.querySelector("ytcp-navigation-drawer");
       return Boolean(app && drawer);
@@ -237,19 +281,9 @@ export const LAYOUT_SIGNATURES: LayoutSignature[] = [
   },
   {
     layout: "2026_V2",
-    matches(ctx) {
-      const v1 = ctx.document.querySelector(
-        'ytcp-app[data-luftballons-layout="2026_V1"]',
-      );
-      const v2 = ctx.document.querySelector(
-        'ytcp-app[data-luftballons-layout="2026_V2"]',
-      );
-      if (v1 && v2) {
-        return false;
-      }
-      // Only explicit V2 marker for now — no speculative public structure.
-      // assumption, calibrate on real device once A/B shell is observed.
-      return Boolean(v2);
+    matches(_ctx) {
+      // 待真机证据 — structural placeholder; never claim a match yet.
+      return false;
     },
   },
 ];
