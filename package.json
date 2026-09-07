@@ -1,0 +1,15 @@
+{
+  "name": "luftballons",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Luftballons — local-first Tampermonkey runtime for YouTube Studio workflows",
+  "scripts": {
+    "build": "pnpm --filter @luftballons/client build",
+    "test": "pnpm --filter @luftballons/client test",
+    "dev": "pnpm --filter @luftballons/client build --watch"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "packageManager": "pnpm@9.15.9"
+}
