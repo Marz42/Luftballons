@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% set title = "Collections" %}
+{% block content %}
+<h1>Collections</h1>
+<table>
+  <thead>
+    <tr>
+      <th>Installation</th>
+      <th>Captured</th>
+      <th>Collector</th>
+      <th>Status</th>
+      <th>Received</th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for item in items %}
+    <tr>
+      <td><code>{{ item.installation_id }}</code></td>
+      <td>{{ item.captured_at }}</td>
+      <td>{{ item.collector }} <span class="muted">schema {{ item.schema_version }}</span></td>
+      <td>{{ item.status }}</td>
+      <td>{{ item.received_at }}</td>
+    </tr>
+  {% else %}
+    <tr><td colspan="5" class="muted">No collections yet.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

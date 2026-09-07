@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% set title = "Errors" %}
+{% block content %}
+<h1>Errors</h1>
+<table>
+  <thead>
+    <tr>
+      <th>Time</th>
+      <th>Installation</th>
+      <th>Module</th>
+      <th>Code</th>
+      <th>Message</th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for item in items %}
+    <tr>
+      <td>{{ item.received_at }}</td>
+      <td><code>{{ item.installation_id }}</code></td>
+      <td>{{ item.module }}</td>
+      <td>{{ item.error_code }}</td>
+      <td>{{ item.message }}</td>
+    </tr>
+  {% else %}
+    <tr><td colspan="5" class="muted">No errors logged.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

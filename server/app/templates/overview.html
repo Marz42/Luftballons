@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% set title = "Overview" %}
+{% block content %}
+<h1>Overview</h1>
+<p class="banner warn">
+  Admin is <strong>internal only</strong> (IMPLEMENTATION §35). Do not expose
+  <code>/admin</code> on the public internet. Bind uvicorn to
+  <code>127.0.0.1</code> or an internal interface behind a reverse proxy.
+  Requires <code>ADMIN_PASSWORD</code>.
+</p>
+<div class="cards">
+  <div class="card"><div class="muted">Installations</div><div class="n">{{ installation_count }}</div></div>
+  <div class="card"><div class="muted">Collections</div><div class="n">{{ collection_count }}</div></div>
+  <div class="card"><div class="muted">Error logs</div><div class="n">{{ error_count }}</div></div>
+  <div class="card"><div class="muted">Config revision</div><div class="n">{{ config_revision }}</div></div>
+</div>
+{% endblock %}

@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% set title = "Installations" %}
+{% block content %}
+<h1>Installations</h1>
+{% if rotated_token %}
+<p class="banner">
+  New token for <code>{{ rotated_id }}</code> (shown once — copy now):
+  <br/><code>{{ rotated_token }}</code>
+</p>
+{% endif %}
+<table>
+  <thead>
+    <tr>
+      <th>Name</th>
+      <th>Id</th>
+      <th>Runtime</th>
+      <th>Seen</th>
+      <th>Enabled</th>
+      <th>Actions</th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for item in items %}
+    <tr>
+      <td>{{ item.display_name }}</td>
+      <td><code>{{ item.id }}</code></td>
+      <td>{{ item.runtime_version }}</td>
+      <td>{{ item.seen }}{% if item.last_seen_at %}<div class="muted">{{ item.last_seen_at }}</div>{% endif %}</td>
+      <td>{{ "yes" if item.enabled else "no" }}</td>
+      <td>
+        <form class="inline" method="post" action="/admin/installations/{{ item.id }}/toggle">
+          <input type="hidden" name="enabled" value="{{ 'false' if item.enabled else 'true' }}"/>
+          <button type="submit">{{ "Disable" if item.enabled else "Enable" }}</button>
+        </form>
+        <form class="inline" method="post" action="/admin/installations/{{ item.id }}/rotate-token">
+          <button type="submit">Rotate token</button>
+        </form>
+      </td>
+    </tr>
+  {% else %}
+    <tr><td colspan="6" class="muted">No installations yet.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

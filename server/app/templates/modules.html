@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% set title = "Modules" %}
+{% block content %}
+<h1>Modules</h1>
+<p class="muted">Remote config revision: {{ revision }}. Unlisted modules default to enabled on clients.</p>
+<p class="banner">
+  Only whitelist fields are stored (<code>enabled</code> / <code>killSwitch</code>).
+  Forbidden keys (script, selector, url, …) are dropped on write.
+</p>
+<table>
+  <thead>
+    <tr>
+      <th>Module</th>
+      <th>Enabled</th>
+      <th>Kill switch</th>
+      <th>Save</th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for item in items %}
+    <tr>
+      <td><code>{{ item.id }}</code></td>
+      <td colspan="3">
+        <form method="post" action="/admin/modules/{{ item.id }}">
+          <label>
+            <input type="checkbox" name="enabled" value="on" {% if item.enabled and not item.killSwitch %}checked{% endif %}/>
+            enabled
+          </label>
+          &nbsp;
+          <label>
+            <input type="checkbox" name="kill_switch" value="on" {% if item.killSwitch %}checked{% endif %}/>
+            killSwitch
+          </label>
+          &nbsp;
+          <button type="submit">Update</button>
+        </form>
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}
