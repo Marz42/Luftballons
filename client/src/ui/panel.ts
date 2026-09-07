@@ -5,6 +5,7 @@ import type {
 } from "../runtime/types.js";
 import { TaskBusyError } from "../runtime/errors.js";
 import { PANEL_STYLES } from "./styles.js";
+import { createCollectionsSection } from "./collections-section.js";
 
 export interface PanelHandle {
   destroy(): void;
@@ -78,6 +79,8 @@ export async function mountLuftballonsPanel(
   text(cancelBtn, "Cancel");
   cancelBtn.disabled = true;
 
+  const collections = createCollectionsSection(runtime);
+
   panel.append(
     title,
     sub,
@@ -87,6 +90,7 @@ export async function mountLuftballonsPanel(
     statusBox,
     cancelBtn,
     errorBox,
+    collections.root,
   );
   root.append(toggle, panel);
   shadow.appendChild(root);
@@ -215,6 +219,7 @@ export async function mountLuftballonsPanel(
     text(toggle, open ? "Luftballons ▾" : "Luftballons");
     if (open) {
       void refreshAvailability();
+      void collections.refresh();
     }
   });
 
@@ -231,9 +236,18 @@ export async function mountLuftballonsPanel(
   const unsubscribe = runtime.taskRunner.subscribe((snapshot) => {
     renderStatus(snapshot);
     renderModules();
+    if (
+      snapshot.state === "COMPLETED" ||
+      snapshot.state === "PARTIAL" ||
+      snapshot.state === "FAILED" ||
+      snapshot.state === "CANCELLED"
+    ) {
+      void collections.refresh();
+    }
   });
 
   await refreshAvailability();
+  await collections.refresh();
   renderStatus(null);
 
   return {
@@ -242,6 +256,7 @@ export async function mountLuftballonsPanel(
       panel.hidden = false;
       text(toggle, "Luftballons ▾");
       void refreshAvailability();
+      void collections.refresh();
     },
     close(): void {
       open = false;

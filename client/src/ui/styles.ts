@@ -131,4 +131,41 @@ export const PANEL_STYLES = `
   margin-top: 6px;
   font-size: 12px;
 }
+
+.lb-collections-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.lb-collections-empty {
+  color: #5f6368;
+  font-size: 12px;
+  padding: 8px 0;
+}
+
+.lb-collection {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 0;
+  border-top: 1px solid #eee;
+}
+
+.lb-collection-meta {
+  color: #202124;
+  font-size: 12px;
+  word-break: break-word;
+}
+
+.lb-collection-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.lb-btn-small {
+  padding: 2px 8px;
+  font-size: 12px;
+  margin-top: 0;
+}
 `;

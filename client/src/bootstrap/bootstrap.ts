@@ -2,6 +2,9 @@ import { createRuntime, BUNDLED_DEFAULTS } from "../runtime/runtime.js";
 import { ModuleRegistry } from "../runtime/module-registry.js";
 import { TaskRunner } from "../runtime/task-runner.js";
 import { createLogger } from "../services/logger.js";
+import { IndexedDbCollectionService } from "../services/collection-service.js";
+import { CsvSink } from "../sinks/csv-sink.js";
+import { JsonSink } from "../sinks/json-sink.js";
 import {
   createChannelBasicStub,
   createSubtitleMultilangStub,
@@ -10,6 +13,8 @@ import { mountApp } from "../ui/app.js";
 import type { LuftballonsModule } from "../runtime/types.js";
 import type { Runtime } from "../runtime/runtime.js";
 import type { PanelHandle } from "../ui/panel.js";
+import type { CollectionService } from "../services/collection-service.js";
+import type { Sink } from "../sinks/sink.js";
 
 export interface BootstrapResult {
   runtime: Runtime;
@@ -19,6 +24,10 @@ export interface BootstrapResult {
 export interface BootstrapOptions {
   modules?: LuftballonsModule[];
   mount?: boolean;
+  /** Override collection storage (tests). Defaults to IndexedDB. */
+  collections?: CollectionService;
+  csvSink?: Sink;
+  jsonSink?: Sink;
 }
 
 /**
@@ -46,9 +55,15 @@ export async function bootstrap(
     registry.register(module);
   }
 
+  const collections =
+    options.collections ?? new IndexedDbCollectionService();
+  const csvSink = options.csvSink ?? new CsvSink();
+  const jsonSink = options.jsonSink ?? new JsonSink();
+
   const taskRunner = new TaskRunner({
     registry,
     logger,
+    collectionService: collections,
   });
 
   const runtime = createRuntime({
@@ -56,6 +71,9 @@ export async function bootstrap(
     taskRunner,
     logger,
     config: BUNDLED_DEFAULTS,
+    collections,
+    csvSink,
+    jsonSink,
   });
 
   let panel: PanelHandle;
