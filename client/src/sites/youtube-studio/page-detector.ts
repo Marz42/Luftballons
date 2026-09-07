@@ -98,57 +98,48 @@ export function detectPageFromUrl(href: string): StudioPage {
 }
 
 /**
- * DOM corroboration (sidebar selected state / page title).
- * assumption, calibrate on real device for aria-current / selected patterns.
+ * DOM corroboration via sidebar aria-current href (real device has no
+ * aria-label on nav items; <main id="main"> has no aria-label / data-page).
  */
 export function detectPageFromDom(doc: Document): StudioPage {
-  const main = doc.querySelector("main[data-page]");
-  const dataPage = main?.getAttribute("data-page");
-  if (
-    dataPage === "DASHBOARD" ||
-    dataPage === "ANALYTICS" ||
-    dataPage === "CONTENT" ||
-    dataPage === "VIDEO_DETAILS" ||
-    dataPage === "SUBTITLES"
-  ) {
-    return dataPage;
-  }
+  // main[data-page] — fixture-only helper for uncalibrated page-ready /
+  // collector selectors; real Studio does not expose it. Do not read it.
+  // main[aria-label] — real device main has none; do not use.
 
-  // assumption, calibrate on real device: aria-current on sidebar
   const current = doc.querySelector(
     "ytcp-navigation-drawer a[aria-current='page'], ytcp-navigation-drawer [aria-current='page']",
   );
-  if (current) {
-    const label = (current.getAttribute("aria-label") ?? "").toLowerCase();
-    const href = (current.getAttribute("href") ?? "").toLowerCase();
-    if (label.includes("analytics") || href.includes("/analytics")) {
-      return "ANALYTICS";
-    }
-    if (
-      label.includes("content") ||
-      href.includes("/videos") ||
-      href.includes("/content")
-    ) {
-      return "CONTENT";
-    }
-    if (label.includes("dashboard") || label.includes("channel")) {
-      return "DASHBOARD";
-    }
-    if (label.includes("subtitle") || href.includes("/translations")) {
-      return "SUBTITLES";
-    }
+  if (!current) {
+    return "UNKNOWN";
   }
 
-  // assumption, calibrate on real device: main landmark aria-label
-  const mainLabel = (
-    doc.querySelector("main[aria-label]")?.getAttribute("aria-label") ?? ""
-  ).toLowerCase();
-  if (mainLabel.includes("analytics")) return "ANALYTICS";
-  if (mainLabel.includes("content")) return "CONTENT";
-  if (mainLabel.includes("dashboard")) return "DASHBOARD";
-  if (mainLabel.includes("subtitle")) return "SUBTITLES";
-  if (mainLabel.includes("video details") || mainLabel.includes("details")) {
-    return "VIDEO_DETAILS";
+  const hrefAttr = current.getAttribute("href") ?? "";
+  let pathname = "";
+  try {
+    pathname = new URL(hrefAttr, "https://studio.youtube.com").pathname;
+  } catch {
+    pathname = hrefAttr;
+  }
+  const path = pathname.toLowerCase();
+
+  // calibrated: Analytics → /analytics/tab-overview…
+  if (path.includes("/analytics/tab-overview")) {
+    return "ANALYTICS";
+  }
+
+  // calibrated: Content → /videos/upload (A) or /content (B)
+  if (path.includes("/videos/upload") || path.includes("/content")) {
+    return "CONTENT";
+  }
+
+  // calibrated: Subtitles prep → /translations
+  if (path.includes("/translations")) {
+    return "SUBTITLES";
+  }
+
+  // calibrated: Dashboard → pathname exactly /channel/{id}
+  if (/^\/channel\/[^/]+\/?$/i.test(path)) {
+    return "DASHBOARD";
   }
 
   return "UNKNOWN";
