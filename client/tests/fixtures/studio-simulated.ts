@@ -208,6 +208,8 @@ function appendAnalyticsBody(
   main: HTMLElement,
   data: CollectorFixtureData,
 ): void {
+  main.append(metricEl("analytics.period", "Period", data.periodLabel));
+  main.append(metricEl("analytics.dates", "Dates", "2026/8/10 – 2026/9/6"));
   if (data.analyticsViews !== undefined) {
     main.append(metricEl("analytics.views", "Views", data.analyticsViews));
   }

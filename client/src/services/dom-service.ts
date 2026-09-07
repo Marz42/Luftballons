@@ -8,6 +8,10 @@
 
 export interface DomTarget {
   id: string;
+  /** Adapter-owned constraint for calibrated CSS candidates. */
+  matches?: (element: Element) => boolean;
+  /** Reject ambiguous calibrated targets instead of choosing the first. */
+  unique?: boolean;
 
   ariaLabel?: string;
   role?: string;
@@ -154,9 +158,11 @@ export function resolveDomTarget(
   const fallbacks = normalizeSelectorFallbacks(target.selectorFallback);
   for (const selector of fallbacks) {
     try {
-      const found = root.querySelector(selector);
-      if (found) {
-        return found;
+      const found = Array.from(root.querySelectorAll(selector))
+        .filter(el => !target.matches || target.matches(el));
+      if (target.unique && found.length > 1) return null;
+      if (found[0]) {
+        return found[0];
       }
     } catch {
       // Invalid selector → try next (fail-closed per entry)

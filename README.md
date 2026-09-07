@@ -11,6 +11,7 @@ Design principles: Human-triggered, UI-only, Fail-closed, Server-optional, no re
 - [`IMPLEMENTATION.md`](./IMPLEMENTATION.md) — interfaces, phases, acceptance (Plan v0.1)
 - [`AGENTS.md`](./AGENTS.md) — guidance for coding agents
 - [`docs/manual-acceptance-p0.md`](./docs/manual-acceptance-p0.md) — Phase 0 Tampermonkey checklist
+- [`docs/studio-dom-calibration.md`](./docs/studio-dom-calibration.md) — 2026-09-07 real DOM evidence, collector v2 behavior and remaining live checks
 
 ## Develop
 

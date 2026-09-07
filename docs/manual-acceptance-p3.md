@@ -1,5 +1,7 @@
 # Phase 3 Manual Acceptance (P3-T1 … P3-T5)
 
+> Updated calibration: [2026-09-07 evidence and collector v2 behavior](./studio-dom-calibration.md). The historical assumption checklist below is superseded for the evidenced Dashboard, Analytics and Content fields. DOM checks are complete for the reported sample; userscript live acceptance is still pending.
+
 Authoritative criteria: `IMPLEMENTATION.md` §39–§45 (YouTube Basic Collector) and SPEC §38–§42, §19.
 
 Automated fixture tests cover collector workflow, PARTIAL failure, cancel, and abbreviation parsing. **Live YouTube Studio DOM cannot be verified in CI / this agent environment** — calibrate selectors on a real logged-in workstation and use the calibration report form below.

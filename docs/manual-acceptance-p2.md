@@ -1,5 +1,7 @@
 # Phase 2 Manual Acceptance (P2-T1 … P2-T4)
 
+> Updated calibration: [2026-09-07 evidence and collector v2 behavior](./studio-dom-calibration.md). The historical assumption checklist below is superseded for the evidenced Dashboard, Analytics and Content fields. DOM checks are complete for the reported sample; userscript live acceptance is still pending.
+
 Authoritative criteria: `IMPLEMENTATION.md` §38 Phase 2 — YouTube Studio Adapter.
 
 Automated unit tests cover detector fail-closed paths, DomService wait/abort, and SPA fixture navigation. **Live YouTube Studio DOM cannot be verified in CI / this agent environment** — calibrate selectors on a real workstation and report mismatches for the next signature revision.

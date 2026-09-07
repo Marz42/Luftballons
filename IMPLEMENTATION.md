@@ -2607,3 +2607,7 @@ FT-004
 ```
 
 不要在 Runtime 尚未稳定前开始写 YouTube 自动点击逻辑。
+
+## P2/P3 calibration update — 2026-09-07
+
+FT-007–010: collector v2 now uses the real zh-Hans-CN Dashboard, Analytics and Content DOM. See [calibration evidence](docs/studio-dom-calibration.md) for selectors, period provenance, current-page scope, and remaining live acceptance. Local tests do not replace Tampermonkey end-to-end evidence. Schema v1 remains unchanged.

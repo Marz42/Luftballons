@@ -8,6 +8,33 @@
 
 import type { DomTarget } from "../../services/dom-service.js";
 
+/** Ignore retained SPA pages and explicitly hidden UI without geometry polling. */
+export function isActiveElement(el: Element): boolean {
+  for (let node: Element | null = el; node; node = node.parentElement) {
+    if (node.hasAttribute("hidden") || node.getAttribute("aria-hidden") === "true") return false;
+    if (node.matches("ytcp-animatable.page:not(.selected)")) return false;
+    const style = node.ownerDocument.defaultView?.getComputedStyle(node);
+    if (style?.display === "none" || style?.visibility === "hidden") return false;
+  }
+  return true;
+}
+
+function calibrated(id: string, selectorFallback: string, matches = isActiveElement): DomTarget {
+  return { id, selectorFallback, matches, unique: true };
+}
+
+export const CONTENT_FIELDS = {
+  title: "a#video-title",
+  views: ".tablecell-views",
+  publishedAt: ".tablecell-date",
+  dateType: ".tablecell-date .cell-description",
+  dateSort: "ytcp-table-header .tablecell-date",
+  footer: "ytcp-table-footer#footer",
+  range: ".page-description",
+  next: "#navigate-after",
+  previous: "#navigate-before",
+} as const;
+
 /** Navigable pages (excludes UNKNOWN). Matches NavigationService StudioTarget. */
 export type StudioTarget =
   | "DASHBOARD"
@@ -103,18 +130,11 @@ export const STUDIO_TARGETS = {
     // future fallback (no aria-label on real device): ariaLabel: "Subtitles"
     selectorFallback: 'ytcp-navigation-drawer a[href*="/translations"]',
   },
-  "page.dashboard.title": {
-    id: "page.dashboard.title",
-    // assumption, calibrate on real device
-    ariaLabel: "Channel dashboard",
-    selectorFallback: 'main[data-page="DASHBOARD"]',
-  },
-  "page.analytics.title": {
-    id: "page.analytics.title",
-    // assumption, calibrate on real device
-    ariaLabel: "Channel analytics",
-    selectorFallback: 'main[data-page="ANALYTICS"]',
-  },
+  "page.dashboard.title": calibrated("page.dashboard.title",
+    'ytcp-app h1.page-title[theme="DASHBOARD"], main[data-page="DASHBOARD"]'),
+  // DEFAULT theme alone is not an Analytics signature. Require its data surface.
+  "page.analytics.title": calibrated("page.analytics.title",
+    'yta-time-picker #picker-trigger, main[data-page="ANALYTICS"]'),
   "page.content.title": {
     id: "page.content.title",
     // calibrated: variant A has ytcp-video-section in main; variant B
@@ -147,61 +167,26 @@ export const STUDIO_TARGETS = {
   },
 
   // --- Channel basic collector anchors (FT-009) ---
-  // Uncalibrated collection fields — keep assumption markers; do not invent.
-  "channel.name": {
-    id: "channel.name",
-    // assumption, calibrate on real device: channel title in Studio chrome
-    ariaLabel: "Channel name",
-    selectorFallback:
-      '[data-luftballons-target="channel.name"], ytcp-channel-name, #channel-name',
-  },
-  "dashboard.period": {
-    id: "dashboard.period",
-    // assumption, calibrate on real device: reporting period control label
-    ariaLabel: "Reporting period",
-    selectorFallback:
-      '[data-luftballons-target="dashboard.period"], [data-metric="period"]',
-  },
-  "dashboard.views": {
-    id: "dashboard.views",
-    // assumption, calibrate on real device: Dashboard views summary card
-    ariaLabel: "Views",
-    selectorFallback:
-      '[data-luftballons-target="dashboard.views"], [data-metric="views"]',
-  },
-  "dashboard.subscriberDelta": {
-    id: "dashboard.subscriberDelta",
-    // assumption, calibrate on real device: net subscribers card on Dashboard
-    ariaLabel: "Subscribers",
-    selectorFallback:
-      '[data-luftballons-target="dashboard.subscriberDelta"], [data-metric="subscriber-delta"]',
-  },
-  "analytics.views": {
-    id: "analytics.views",
-    // assumption, calibrate on real device: Analytics overview views
-    ariaLabel: "Views",
-    selectorFallback:
-      'main[data-page="ANALYTICS"] [data-luftballons-target="analytics.views"], main[data-page="ANALYTICS"] [data-metric="views"]',
-  },
-  "analytics.subscriberDelta": {
-    id: "analytics.subscriberDelta",
-    // assumption, calibrate on real device: Analytics subscriber growth
-    ariaLabel: "Subscribers",
-    selectorFallback:
-      'main[data-page="ANALYTICS"] [data-luftballons-target="analytics.subscriberDelta"], main[data-page="ANALYTICS"] [data-metric="subscriber-delta"]',
-  },
-  "content.videos.list": {
-    id: "content.videos.list",
-    // assumption, calibrate on real device: Content library table/list root
-    ariaLabel: "Channel content list",
-    selectorFallback:
-      '[data-luftballons-target="content.videos.list"], ytcp-video-section-content, table.video-table tbody',
-  },
+  // 2026-09-07 zh-Hans-CN evidence: docs/studio-dom-calibration.md.
+  "channel.name": calibrated("channel.name", "ytcp-navigation-drawer #entity-name"),
+  "dashboard.period": calibrated("dashboard.period",
+    "ytcd-channel-facts-item .section-title > .section-subtitle-text",
+    el => isActiveElement(el) && el.parentElement?.querySelector(".section-title-text")?.textContent?.trim() === "摘要"),
+  "dashboard.views": calibrated("dashboard.views",
+    "ytcd-channel-facts-item #metrics-table #metric-0-value",
+    el => isActiveElement(el) && el.closest(".metric-row")?.querySelector(".metric-title")?.textContent?.trim() === "观看次数"),
+  // Only the empty trend is evidenced; do not parse future prose as net growth.
+  "dashboard.subscriberDelta": calibrated("dashboard.subscriberDelta", "ytcd-channel-facts-item .subscribers-trend", el => isActiveElement(el) && !el.textContent?.trim()),
+  "analytics.views": calibrated("analytics.views", "#key-metric-blocks #EXTERNAL_VIEWS-tab #metric-total"),
+  "analytics.subscriberDelta": calibrated("analytics.subscriberDelta", "#key-metric-blocks #SUBSCRIBERS_NET_CHANGE-tab #metric-total"),
+  "analytics.period": calibrated("analytics.period", "yta-time-picker #picker-trigger .dropdown-trigger-text"),
+  "analytics.dates": calibrated("analytics.dates", "yta-time-picker #picker-trigger .label-text"),
+  "content.videos.list": calibrated("content.videos.list", "ytcp-video-section-content#video-list"),
 } as const satisfies Record<string, DomTarget>;
 
 /**
  * Relative selector for recent-video rows under content.videos.list.
- * assumption, calibrate on real device: row carries video id + title/views cells.
+ * Real row host is ytcp-video-row; data-* alternatives support simulated fixtures.
  */
 export const CONTENT_VIDEO_ROW_SELECTOR =
   '[data-luftballons-video-row], ytcp-video-row, tr[data-video-id]';

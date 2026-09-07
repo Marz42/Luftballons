@@ -19,13 +19,15 @@ import type {
 } from "../../navigation.js";
 import {
   CONTENT_VIDEO_ROW_SELECTOR,
+  CONTENT_FIELDS,
+  isActiveElement,
   getTarget,
 } from "../../selectors.js";
 import type { ChannelBasicData, RecentVideoSnapshot } from "./schema.js";
 import { parseDisplayMetric, type MetricPrecision } from "./metrics.js";
 
 export const CHANNEL_BASIC_COLLECTOR_ID = "youtube.channel.basic";
-export const CHANNEL_BASIC_COLLECTOR_VERSION = 1;
+export const CHANNEL_BASIC_COLLECTOR_VERSION = 2;
 
 export interface ChannelBasicCollectorDeps {
   dom: CancellableDomService;
@@ -146,9 +148,11 @@ function readVideoIdFromRow(row: Element): string | undefined {
   if (attr && attr.trim().length > 0) {
     return attr.trim();
   }
-  const link = row.querySelector("a[href*='/video/']");
+  const links = row.querySelectorAll(CONTENT_FIELDS.title);
+  if (links.length !== 1) return undefined;
+  const link = links[0];
   const href = link?.getAttribute("href") ?? "";
-  const match = href.match(/\/video\/([^/]+)/i);
+  const match = href.match(/^\/video\/([^/?#]+)\/edit(?:[/?#]|$)/i);
   return match?.[1];
 }
 
@@ -159,7 +163,35 @@ function readCell(
   const el =
     row.querySelector(`[data-luftballons-field="${attr}"]`) ??
     row.querySelector(`[data-field="${attr}"]`);
-  return metricText(el);
+  if (el) return metricText(el);
+  const selector = CONTENT_FIELDS[attr as "title" | "views" | "publishedAt"];
+  if (!selector) return null;
+  const cells = Array.from(row.querySelectorAll(selector)).filter(isActiveElement);
+  if (cells.length !== 1) return null;
+  if (attr === "publishedAt") {
+    if (metricText(row.querySelector(CONTENT_FIELDS.dateType)) !== "发布日期") return null;
+    return Array.from(cells[0]!.childNodes).filter(n => n.nodeType === 3)
+      .map(n => n.textContent).join("").trim() || null;
+  }
+  return metricText(cells[0]!);
+}
+
+function directText(el: Element | null): string | null {
+  if (!el) return null;
+  return Array.from(el.childNodes).filter(n => n.nodeType === 3)
+    .map(n => n.textContent).join("").trim() || null;
+}
+
+function periodDates(raw: string | null): { start: string; end: string } | undefined {
+  const m = raw?.match(/^(\d{4})\/(\d{1,2})\/(\d{1,2})\s*[–—-]\s*(\d{4})\/(\d{1,2})\/(\d{1,2})$/);
+  if (!m) return undefined;
+  const date = (offset: number): string | undefined => {
+    const value = `${m[offset]}-${m[offset + 1]!.padStart(2, "0")}-${m[offset + 2]!.padStart(2, "0")}`;
+    const parsed = new Date(`${value}T00:00:00Z`);
+    return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value ? value : undefined;
+  };
+  const start = date(1), end = date(4);
+  return start && end && start <= end ? { start, end } : undefined;
 }
 
 function validateAndBuild(
@@ -167,6 +199,8 @@ function validateAndBuild(
     channelId?: string;
     channelName: string;
     periodLabel?: string;
+    periodStart?: string;
+    periodEnd?: string;
     views?: number;
     subscriberDelta?: number;
     recentVideos: RecentVideoSnapshot[];
@@ -191,6 +225,8 @@ function validateAndBuild(
       ...(draft.channelId !== undefined ? { channelId: draft.channelId } : {}),
     },
     period: {
+      ...(draft.periodStart ? { start: draft.periodStart } : {}),
+      ...(draft.periodEnd ? { end: draft.periodEnd } : {}),
       ...(draft.periodLabel !== undefined ? { label: draft.periodLabel } : {}),
     },
     summary: {
@@ -254,6 +290,8 @@ export async function runChannelBasicCollector(
     channelId?: string;
     channelName: string;
     periodLabel?: string;
+    periodStart?: string;
+    periodEnd?: string;
     views?: number;
     subscriberDelta?: number;
     recentVideos: RecentVideoSnapshot[];
@@ -303,7 +341,7 @@ export async function runChannelBasicCollector(
       draft.channelId = channelId;
     }
     const nameEl = await deps.dom.find(getTarget("channel.name"));
-    const nameText = metricText(nameEl);
+    const nameText = nameEl?.id === "entity-name" ? directText(nameEl) : metricText(nameEl);
     if (nameText) {
       draft.channelName = nameText;
     }
@@ -313,8 +351,8 @@ export async function runChannelBasicCollector(
 
     if (deps.navigation.currentPage() !== "DASHBOARD") {
       await deps.navigation.navigate("DASHBOARD", ctx.signal);
-      await deps.navigation.waitReady("DASHBOARD", undefined, ctx.signal);
     }
+    await deps.navigation.waitReady("DASHBOARD", undefined, ctx.signal);
 
     throwIfAborted(ctx.signal);
 
@@ -356,30 +394,27 @@ export async function runChannelBasicCollector(
       await deps.navigation.waitReady("ANALYTICS", undefined, ctx.signal);
       throwIfAborted(ctx.signal);
 
-      if (draft.views === undefined) {
-        applyMetric(
-          metrics,
-          "views",
-          await deps.dom.readText(getTarget("analytics.views")),
-          warnings,
-          "analytics",
-        );
-        if (metrics.views !== undefined) {
-          draft.views = metrics.views;
+      const analyticsPeriod = await deps.dom.readText(getTarget("analytics.period"));
+      const dates = periodDates(await deps.dom.readText(getTarget("analytics.dates")));
+      const analytics: DraftMetrics = {};
+      applyMetric(analytics, "views", await deps.dom.readText(getTarget("analytics.views")), warnings, "analytics");
+      applyMetric(analytics, "subscriberDelta", await deps.dom.readText(getTarget("analytics.subscriberDelta")), warnings, "analytics");
+      // Never merge a dashboard metric with an unverified Analytics period.
+      // If Analytics has values, use that page as the sole summary source.
+      if (analytics.views !== undefined || analytics.subscriberDelta !== undefined) {
+        if (analyticsPeriod && dates) {
+          if (analytics.views === undefined) delete draft.views;
+          else draft.views = analytics.views;
+          if (analytics.subscriberDelta === undefined) delete draft.subscriberDelta;
+          else draft.subscriberDelta = analytics.subscriberDelta;
+          draft.periodLabel = analyticsPeriod;
+          draft.periodStart = dates.start;
+          draft.periodEnd = dates.end;
+        } else {
+          warn(warnings, "ANALYTICS_PERIOD_UNKNOWN", "Analytics metrics omitted: date range was not readable");
         }
       }
-      if (draft.subscriberDelta === undefined) {
-        applyMetric(
-          metrics,
-          "subscriberDelta",
-          await deps.dom.readText(getTarget("analytics.subscriberDelta")),
-          warnings,
-          "analytics",
-        );
-        if (metrics.subscriberDelta !== undefined) {
-          draft.subscriberDelta = metrics.subscriberDelta;
-        }
-      }
+
       if (draft.views === undefined) {
         warn(warnings, "VIEWS_MISSING", "Views not found on Dashboard or Analytics");
       }
@@ -406,7 +441,20 @@ export async function runChannelBasicCollector(
         "Content video list selector failed; recentVideos empty",
       );
     } else {
-      const rows = list.querySelectorAll(CONTENT_VIDEO_ROW_SELECTOR);
+      const rows = Array.from(list.querySelectorAll(CONTENT_VIDEO_ROW_SELECTOR)).filter(isActiveElement);
+      if (list.matches("ytcp-video-section-content#video-list")) {
+        const sort = list.querySelector(CONTENT_FIELDS.dateSort)?.getAttribute("aria-sort");
+        if (sort !== "descending") warn(warnings, "VIDEO_ORDER_UNKNOWN", "Current video rows are not confirmed date-descending");
+        const footer = list.querySelector(CONTENT_FIELDS.footer);
+        const next = footer?.querySelector(CONTENT_FIELDS.next);
+        const previous = footer?.querySelector(CONTENT_FIELDS.previous);
+        const disabled = (el: Element | null | undefined): boolean => Boolean(el?.hasAttribute("disabled") && el.getAttribute("aria-disabled") === "true");
+        const range = metricText(footer?.querySelector(CONTENT_FIELDS.range) ?? null)?.match(/^第\s*([\d,]+)\s*-\s*([\d,]+)\s*条，共\s*([\d,]+)\s*条$/);
+        const numbers = range?.slice(1).map(n => Number(n.replace(/,/g, "")));
+        if (!disabled(next) || !disabled(previous) || !numbers || numbers[0] !== 1 || numbers[1] !== rows.length || numbers[2] !== rows.length) {
+          warn(warnings, "VIDEO_SCOPE_PARTIAL", "Only currently rendered video rows captured; full filtered list not verified");
+        }
+      }
       if (rows.length === 0) {
         warn(
           warnings,
