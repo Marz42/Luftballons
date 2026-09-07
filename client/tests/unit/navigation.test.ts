@@ -26,14 +26,16 @@ describe("NavigationService (FT-008)", () => {
       setHref: (href) => {
         // Fixture click handler already updates; setHref keeps detector in sync
         // when tests drive navigate without relying solely on click side effects.
+        const u = new URL(href, "https://studio.youtube.com");
+        const path = u.pathname;
         const page =
-          href.includes("/analytics")
+          path.includes("/analytics")
             ? "ANALYTICS"
-            : href.includes("/videos")
+            : path.includes("/videos") || path.includes("/content")
               ? "CONTENT"
-              : href.includes("/translations")
+              : path.includes("/translations")
                 ? "SUBTITLES"
-                : href.includes("/edit")
+                : path.includes("/edit")
                   ? "VIDEO_DETAILS"
                   : "DASHBOARD";
         fixture?.setPage(page);

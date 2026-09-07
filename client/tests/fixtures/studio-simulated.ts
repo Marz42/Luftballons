@@ -1,6 +1,7 @@
 /**
  * Simulated YouTube Studio DOM fixtures.
- * Structure is constructed for detector/nav/collector tests — NOT a real Studio snapshot.
+ * Calibrated shell/nav structure mirrors real-device evidence (P2 batch).
+ * Collector metric nodes remain fixture helpers (uncalibrated assumptions).
  * No real channel / account / video identifiers (demo placeholders only).
  */
 
@@ -10,46 +11,71 @@ export type FixtureLayout = "2026_V1" | "2026_V2" | "NONE";
 
 export type FixturePage = StudioTarget;
 
+/**
+ * Content URL / sidebar href variants observed on real devices.
+ * A: /videos/upload + ytcp-video-section
+ * B: /content?theme=dark (container unreported)
+ */
+export type ContentUrlVariant = "A" | "B";
+
 const CHANNEL = "UC_demo_channel";
 const VIDEO = "vid_demo_001";
 
-const PAGE_HREF: Record<FixturePage, string> = {
-  DASHBOARD: `https://studio.youtube.com/channel/${CHANNEL}`,
-  ANALYTICS: `https://studio.youtube.com/channel/${CHANNEL}/analytics`,
-  CONTENT: `https://studio.youtube.com/channel/${CHANNEL}/videos`,
-  VIDEO_DETAILS: `https://studio.youtube.com/video/${VIDEO}/edit`,
-  SUBTITLES: `https://studio.youtube.com/video/${VIDEO}/translations`,
-};
+function pageHref(
+  page: FixturePage,
+  contentVariant: ContentUrlVariant,
+): string {
+  const theme = contentVariant === "B" ? "?theme=dark" : "";
+  switch (page) {
+    case "DASHBOARD":
+      return `https://studio.youtube.com/channel/${CHANNEL}${theme}`;
+    case "ANALYTICS":
+      return `https://studio.youtube.com/channel/${CHANNEL}/analytics/tab-overview/period-default${theme}`;
+    case "CONTENT":
+      return contentVariant === "B"
+        ? `https://studio.youtube.com/channel/${CHANNEL}/content?theme=dark`
+        : `https://studio.youtube.com/channel/${CHANNEL}/videos/upload`;
+    case "VIDEO_DETAILS":
+      return `https://studio.youtube.com/video/${VIDEO}/edit`;
+    case "SUBTITLES":
+      return `https://studio.youtube.com/video/${VIDEO}/translations`;
+  }
+}
 
-const PAGE_ARIA: Record<FixturePage, string> = {
-  DASHBOARD: "Channel dashboard",
-  ANALYTICS: "Channel analytics",
-  CONTENT: "Channel content",
-  VIDEO_DETAILS: "Video details",
-  SUBTITLES: "Subtitles",
-};
-
-const NAV: Array<{ page: FixturePage; label: string; href: string; dataNav: string }> =
-  [
+/** Sidebar items mirroring real Studio (no aria-label). */
+function navItems(contentVariant: ContentUrlVariant): Array<{
+  page: FixturePage;
+  href: string;
+  label: string;
+}> {
+  const theme = contentVariant === "B" ? "?theme=dark" : "";
+  const contentHref =
+    contentVariant === "B"
+      ? `/channel/${CHANNEL}/content${theme}`
+      : `/channel/${CHANNEL}/videos/upload`;
+  return [
     {
       page: "DASHBOARD",
+      href: `/channel/${CHANNEL}${theme}`,
       label: "Dashboard",
-      href: `/channel/${CHANNEL}`,
-      dataNav: "dashboard",
-    },
-    {
-      page: "ANALYTICS",
-      label: "Analytics",
-      href: `/channel/${CHANNEL}/analytics`,
-      dataNav: "analytics",
     },
     {
       page: "CONTENT",
+      href: contentHref,
       label: "Content",
-      href: `/channel/${CHANNEL}/videos`,
-      dataNav: "content",
+    },
+    {
+      page: "ANALYTICS",
+      href: `/channel/${CHANNEL}/analytics/tab-overview/period-default${theme}`,
+      label: "Analytics",
+    },
+    {
+      page: "SUBTITLES",
+      href: `/channel/${CHANNEL}/translations${theme}`,
+      label: "Translations",
     },
   ];
+}
 
 export interface FixtureRecentVideo {
   videoId: string;
@@ -104,7 +130,15 @@ export const DEFAULT_COLLECTOR_DATA: CollectorFixtureData = {
 export interface MountStudioFixtureOptions {
   layout?: FixtureLayout;
   page?: FixturePage;
-  /** When true, DOM page marker disagrees with URL (conflict → UNKNOWN). */
+  /**
+   * Content URL variant (A=/videos/upload, B=/content?theme=dark).
+   * Also controls whether dashboard/analytics hrefs carry ?theme=dark.
+   */
+  contentVariant?: ContentUrlVariant;
+  /**
+   * Put aria-current on this nav page while URL follows `page`
+   * (DOM/URL conflict → UNKNOWN).
+   */
   conflictDomPage?: FixturePage;
   /** Extra broken markup for unknown-layout tests. */
   corruptLayout?: boolean;
@@ -114,6 +148,7 @@ export interface MountStudioFixtureOptions {
 
 export interface StudioFixtureHandle {
   href: string;
+  contentVariant: ContentUrlVariant;
   setPage(page: FixturePage): void;
   /** Replace collector payload and re-render current page. */
   setCollectorData(data: CollectorFixtureData | false): void;
@@ -126,6 +161,7 @@ function setLocationHref(href: string): void {
       hostname: new URL(href).hostname,
       href,
       pathname: new URL(href).pathname,
+      search: new URL(href).search,
       assign: (url: string) => setLocationHref(String(url)),
       replace: (url: string) => setLocationHref(String(url)),
     },
@@ -189,13 +225,25 @@ function appendAnalyticsBody(
 function appendContentBody(
   main: HTMLElement,
   data: CollectorFixtureData,
+  contentVariant: ContentUrlVariant,
 ): void {
+  // Variant A evidence: ytcp-video-section inside main.
+  // Variant B: container unreported — do not invent; mount list under main.
+  const host =
+    contentVariant === "A"
+      ? document.createElement("ytcp-video-section")
+      : main;
+
   if (data.omitVideoList) {
     const empty = document.createElement("div");
     empty.textContent = "Simulated CONTENT (list selector broken)";
-    main.append(empty);
+    host.append(empty);
+    if (contentVariant === "A") {
+      main.append(host);
+    }
     return;
   }
+
   const list = document.createElement("div");
   list.setAttribute("data-luftballons-target", "content.videos.list");
   list.setAttribute("aria-label", "Channel content list");
@@ -223,7 +271,10 @@ function appendContentBody(
     row.append(title, published, views, link);
     list.append(row);
   }
-  main.append(list);
+  host.append(list);
+  if (contentVariant === "A") {
+    main.append(host);
+  }
 }
 
 /**
@@ -235,6 +286,7 @@ export function mountStudioFixture(
 ): StudioFixtureHandle {
   const layout = options.layout ?? "2026_V1";
   const page = options.page ?? "DASHBOARD";
+  const contentVariant: ContentUrlVariant = options.contentVariant ?? "A";
   let collectorData: CollectorFixtureData | false =
     options.collector === false
       ? false
@@ -244,7 +296,7 @@ export function mountStudioFixture(
   root.setAttribute("data-luftballons-fixture", "simulated-studio");
   root.setAttribute(
     "data-note",
-    "simulated structure, not a real Studio snapshot",
+    "simulated structure calibrated to real Studio shell evidence",
   );
 
   let currentPage: FixturePage = page;
@@ -257,22 +309,49 @@ export function mountStudioFixture(
       const junk = document.createElement("div");
       junk.textContent = "unrecognized shell";
       root.append(junk);
-      setLocationHref(PAGE_HREF[current]);
+      const href = pageHref(current, contentVariant);
+      handle.href = href;
+      setLocationHref(href);
       return;
     }
 
-    const app = document.createElement("ytcp-app");
-    app.setAttribute("data-luftballons-layout", layout);
+    // 2026_V2: signature is pending real evidence (matches always false).
+    // Mount a non-V1 shell so tests do not accidentally claim V1.
+    if (layout === "2026_V2") {
+      const app = document.createElement("ytcp-app");
+      // No ytcp-navigation-drawer → V1 signature does not match.
+      const main = document.createElement("main");
+      main.id = "main";
+      main.textContent = "V2 shell placeholder — awaiting real-device evidence";
+      app.append(main);
+      root.append(app);
+      const href = pageHref(current, contentVariant);
+      handle.href = href;
+      setLocationHref(href);
+      return;
+    }
+
+    // 2026_V1: real structure — ytcp-app + ytcp-navigation-drawer
+    // (no data-luftballons-layout attribute; real device has none)
+    const app = document.createElement("ytcp-entity-page");
+    const ytcpApp = document.createElement("ytcp-app");
 
     const drawer = document.createElement("ytcp-navigation-drawer");
-    for (const item of NAV) {
+
+    // Outbound channel home (absolute URL) — must NOT match dashboard selector.
+    const home = document.createElement("a");
+    home.setAttribute("href", `https://www.youtube.com/channel/${CHANNEL}/`);
+    home.textContent = "Channel home";
+    drawer.append(home);
+
+    const ariaCurrentPage = options.conflictDomPage ?? current;
+
+    for (const item of navItems(contentVariant)) {
       const a = document.createElement("a");
       a.setAttribute("href", item.href);
-      a.setAttribute("aria-label", item.label);
-      a.setAttribute("role", "link");
-      a.setAttribute("data-nav", item.dataNav);
+      // Real device: no aria-label / aria-selected on sidebar items.
       a.textContent = item.label;
-      if (item.page === current) {
+      if (item.page === ariaCurrentPage) {
         a.setAttribute("aria-current", "page");
       }
       a.addEventListener("click", (ev) => {
@@ -282,20 +361,11 @@ export function mountStudioFixture(
       drawer.append(a);
     }
 
-    if (current === "VIDEO_DETAILS" || current === "SUBTITLES") {
+    if (current === "VIDEO_DETAILS") {
       const deep = document.createElement("a");
-      deep.setAttribute(
-        "href",
-        current === "SUBTITLES"
-          ? `/video/${VIDEO}/translations`
-          : `/video/${VIDEO}/edit`,
-      );
-      deep.setAttribute(
-        "aria-label",
-        current === "SUBTITLES" ? "Subtitles" : "Video details",
-      );
-      deep.setAttribute("role", "link");
+      deep.setAttribute("href", `/video/${VIDEO}/edit`);
       deep.setAttribute("aria-current", "page");
+      deep.textContent = "Video details";
       drawer.append(deep);
     }
 
@@ -308,33 +378,48 @@ export function mountStudioFixture(
     }
 
     const main = document.createElement("main");
-    const domPage = options.conflictDomPage ?? current;
-    main.setAttribute("data-page", domPage);
-    main.setAttribute("aria-label", PAGE_ARIA[domPage]);
+    main.id = "main";
+    // Fixture helper only: uncalibrated page-ready / analytics collector
+    // selectors still key off data-page. Real Studio main has no data-page.
+    const markerPage = options.conflictDomPage ?? current;
+    main.setAttribute("data-page", markerPage);
 
-    if (collectorData && domPage === current) {
+    if (collectorData && markerPage === current) {
       if (current === "DASHBOARD") {
         appendDashboardBody(main, collectorData);
       } else if (current === "ANALYTICS") {
         appendAnalyticsBody(main, collectorData);
       } else if (current === "CONTENT") {
-        appendContentBody(main, collectorData);
+        appendContentBody(main, collectorData, contentVariant);
       } else {
-        main.textContent = `Simulated ${domPage}`;
+        main.textContent = `Simulated ${markerPage}`;
+      }
+    } else if (!collectorData) {
+      if (current === "CONTENT" && contentVariant === "A") {
+        const section = document.createElement("ytcp-video-section");
+        section.textContent = "Simulated CONTENT";
+        main.append(section);
+      } else {
+        main.textContent = `Simulated ${markerPage}`;
       }
     } else {
-      main.textContent = `Simulated ${domPage}`;
+      main.textContent = `Simulated ${markerPage}`;
     }
 
-    app.append(drawer, main);
+    ytcpApp.append(drawer, main);
+    app.append(ytcpApp);
     root.append(app);
-    setLocationHref(PAGE_HREF[current]);
+
+    const href = pageHref(current, contentVariant);
+    handle.href = href;
+    setLocationHref(href);
   };
 
   const handle: StudioFixtureHandle = {
-    href: PAGE_HREF[page],
+    href: pageHref(page, contentVariant),
+    contentVariant,
     setPage(next: FixturePage) {
-      handle.href = PAGE_HREF[next];
+      handle.href = pageHref(next, contentVariant);
       render(next);
     },
     setCollectorData(data) {
@@ -351,23 +436,26 @@ export function mountStudioFixture(
   return handle;
 }
 
-/** Dual layout markers to force signature conflict → UNKNOWN. */
+/**
+ * Dual incomplete shells — neither claims a unique calibrated layout.
+ * (2026_V2 signature is always false; V1 requires navigation-drawer.)
+ */
 export function mountConflictingLayoutFixture(): StudioFixtureHandle {
   const root = document.createElement("div");
   root.setAttribute("data-luftballons-fixture", "simulated-studio-conflict");
 
+  // Two apps without drawers → V1 false, V2 false → UNKNOWN
   const a = document.createElement("ytcp-app");
-  a.setAttribute("data-luftballons-layout", "2026_V1");
   const b = document.createElement("ytcp-app");
-  b.setAttribute("data-luftballons-layout", "2026_V2");
   root.append(a, b);
   document.body.append(root);
 
-  const href = PAGE_HREF.DASHBOARD;
+  const href = pageHref("DASHBOARD", "A");
   setLocationHref(href);
 
   return {
     href,
+    contentVariant: "A",
     setPage() {},
     setCollectorData() {},
     destroy() {
