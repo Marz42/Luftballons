@@ -5,13 +5,24 @@ First adapter target: YouTube Studio.
 
 Design principles: Human-triggered, UI-only, Fail-closed, Server-optional, no remote code execution.
 
+## Milestone status
+
+| Milestone | Status |
+|-----------|--------|
+| M0.1-network (Phases 0–5 code) | **Complete** — runtime, Studio collectors, subtitle + Human Gate, optional Server/Admin/remote config |
+| Phase 6 Security Hardening (FT-017/018) | **In progress** — automated audit + compromise/token/OFF regressions; see `SECURITY.md` |
+| Release Candidate | **Pending** manual live acceptance (Idle 10min, DevTools Network OFF, multi-PC Gate E) |
+
 ## Docs (authoritative)
 
 - [`SPEC.md`](./SPEC.md) — product & security baseline (MVP SPEC v0.1)
 - [`IMPLEMENTATION.md`](./IMPLEMENTATION.md) — interfaces, phases, acceptance (Plan v0.1)
+- [`SECURITY.md`](./SECURITY.md) — threat model, token/CORS notes, audit triage
 - [`AGENTS.md`](./AGENTS.md) — guidance for coding agents
+- [`docs/release-gate.md`](./docs/release-gate.md) — Gate A–E + Blocker map for v0.1 release
 - [`docs/manual-acceptance-p0.md`](./docs/manual-acceptance-p0.md) — Phase 0 Tampermonkey checklist
-- [`docs/studio-dom-calibration.md`](./docs/studio-dom-calibration.md) — 2026-09-07 real DOM evidence, collector v2 behavior and remaining live checks
+- [`docs/manual-acceptance-p2.md`](./docs/manual-acceptance-p2.md) … [`p5.md`](./docs/manual-acceptance-p5.md) — phase handbooks
+- [`docs/studio-dom-calibration.md`](./docs/studio-dom-calibration.md) — 2026-09-07 real DOM evidence
 
 ## Develop
 
@@ -36,7 +47,17 @@ Install that file in Tampermonkey (Chrome / Chromium). Match hosts are only:
 - `https://www.youtube.com/*`
 - `https://studio.youtube.com/*`
 
-## Server (Phase 5b — optional)
+### Security audit
+
+After `pnpm build`, run the repeatable Phase 6 audit (userscript `@match`, forbidden source/dist patterns):
+
+```bash
+./scripts/security-audit.sh
+```
+
+Exit `0` = clean; any violation exits `1`. Rules and whitelist are documented in the script header.
+
+## Server (optional — Phase 5b+)
 
 Local FastAPI + SQLite for Installation register, Collection ingest, Remote Config,
 Error intake, and minimal Admin SSR.
