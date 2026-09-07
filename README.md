@@ -36,16 +36,24 @@ Install that file in Tampermonkey (Chrome / Chromium). Match hosts are only:
 - `https://www.youtube.com/*`
 - `https://studio.youtube.com/*`
 
-## Server (Phase 5a — optional)
+## Server (Phase 5b — optional)
 
-Local FastAPI + SQLite for Installation register + Collection ingest. Config/Admin/Errors are Phase 5b.
+Local FastAPI + SQLite for Installation register, Collection ingest, Remote Config,
+Error intake, and minimal Admin SSR.
 
 ```bash
 cd server
 python3 -m venv .venv
 .venv/bin/pip install -e '.[dev]'
 .venv/bin/pytest -q
-LUFTBALLONS_DB_PATH=./data/luftballons.db .venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000
+export ADMIN_PASSWORD='choose-a-strong-password'
+LUFTBALLONS_DB_PATH=./data/luftballons.db .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
+
+**Admin is internal-only** — do not expose `/admin` on the public internet. Bind
+uvicorn to `127.0.0.1` (or an internal interface) and use a reverse proxy when
+needed. If `ADMIN_PASSWORD` is unset, `/admin` returns 401 (no default password).
+
+See [`server/README.md`](./server/README.md) for Admin Basic Auth and API surface.
 
 Or: `scripts/dev-server.sh` (requires the venv above).
