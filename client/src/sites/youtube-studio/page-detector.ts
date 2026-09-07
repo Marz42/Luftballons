@@ -207,7 +207,7 @@ export function detectStudio(
   }
 
   const result: PageDetection = {
-    page: layout === "UNKNOWN" ? merged.page : merged.page,
+    page: merged.page,
     layout,
     urlPage,
     domPage,

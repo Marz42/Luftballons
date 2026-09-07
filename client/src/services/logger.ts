@@ -14,9 +14,7 @@ export interface CreateLoggerOptions {
 }
 
 function defaultSink(entry: LogEntry): void {
-  const payload = entry.context
-    ? `[Luftballons] ${entry.message}`
-    : `[Luftballons] ${entry.message}`;
+  const payload = `[Luftballons] ${entry.message}`;
   const args = entry.context ? [payload, entry.context] : [payload];
   switch (entry.level) {
     case "DEBUG":
