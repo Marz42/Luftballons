@@ -241,9 +241,12 @@ describe("network settings defaults", () => {
 });
 
 describe("fetch egress allowlist (static)", () => {
-  it("fetch( only appears in remote-sink (sole network egress)", () => {
+  it("fetch( only appears in remote-sink / config-service (sole network egress)", () => {
     const root = resolve(HERE, "../../src");
-    const allowed = new Set([resolve(root, "sinks/remote-sink.ts")]);
+    const allowed = new Set([
+      resolve(root, "sinks/remote-sink.ts"),
+      resolve(root, "services/config-service.ts"),
+    ]);
     const stack = [root];
     const offenders: string[] = [];
     while (stack.length > 0) {

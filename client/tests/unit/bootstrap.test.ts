@@ -22,6 +22,7 @@ describe("bootstrap", () => {
     const { runtime, panel } = await bootstrap({
       modules: [createFixtureSubtitleModule(fixture)],
       mount: false,
+      backgroundConfigRefresh: false,
     });
     expect(runtime.version).toBe("0.1.0");
     expect(runtime.config.networkMode).toBe("MANUAL");
@@ -35,6 +36,7 @@ describe("bootstrap", () => {
   it("default modules include real channel.basic + subtitle.multilang", async () => {
     const { runtime, panel, studioAdapter } = await bootstrap({
       mount: false,
+      backgroundConfigRefresh: false,
     });
     expect(studioAdapter).toBeDefined();
     const ids = runtime.registry.list().map((m) => m.id);
