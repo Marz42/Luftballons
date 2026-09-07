@@ -9,19 +9,22 @@ import {
 } from "../services/dom-service.js";
 import { CsvSink } from "../sinks/csv-sink.js";
 import { JsonSink } from "../sinks/json-sink.js";
-import { createSubtitleMultilangStub } from "../modules/youtube-studio-stubs.js";
 import { createChannelBasicModule } from "../sites/youtube-studio/modules/channel-basic/module.js";
+import { createSubtitleMultilangModule } from "../sites/youtube-studio/modules/subtitle-multilang/module.js";
 import { detectStudio } from "../sites/youtube-studio/page-detector.js";
 import {
   createNavigationService,
   type CancellableNavigationService,
 } from "../sites/youtube-studio/navigation.js";
+import { createPanelHumanGate } from "../ui/human-gate.js";
 import { mountApp } from "../ui/app.js";
 import type { LuftballonsModule } from "../runtime/types.js";
 import type { Runtime } from "../runtime/runtime.js";
 import type { PanelHandle } from "../ui/panel.js";
 import type { CollectionService } from "../services/collection-service.js";
 import type { Sink } from "../sinks/sink.js";
+import type { HumanGateService } from "../runtime/types.js";
+import type { PanelHumanGate } from "../ui/human-gate.js";
 
 /**
  * Phase 2+ Studio adapter handles.
@@ -39,6 +42,7 @@ export interface BootstrapResult {
   panel: PanelHandle;
   /** Present when Studio adapter wiring is enabled (default on). */
   studioAdapter?: StudioAdapter;
+  humanGate?: HumanGateService;
 }
 
 export interface BootstrapOptions {
@@ -50,6 +54,8 @@ export interface BootstrapOptions {
   jsonSink?: Sink;
   /** Skip creating Dom/Navigation services (rare). */
   studioAdapter?: false | StudioAdapter;
+  /** Override Human Gate (tests inject fakes). */
+  humanGate?: HumanGateService | PanelHumanGate;
 }
 
 function defaultStudioAdapter(): StudioAdapter {
@@ -67,7 +73,10 @@ function defaultModules(adapter: StudioAdapter): LuftballonsModule[] {
       dom: adapter.dom,
       navigation: adapter.navigation,
     }),
-    createSubtitleMultilangStub(),
+    createSubtitleMultilangModule({
+      dom: adapter.dom,
+      navigation: adapter.navigation,
+    }),
   ];
 }
 
@@ -101,7 +110,12 @@ export async function bootstrap(
     options.modules ??
     (studioAdapter
       ? defaultModules(studioAdapter)
-      : [createSubtitleMultilangStub()]);
+      : [
+          createSubtitleMultilangModule({
+            dom: createDomService(),
+            navigation: createNavigationService({ dom: createDomService() }),
+          }),
+        ]);
 
   for (const module of modules) {
     registry.register(module);
@@ -112,10 +126,13 @@ export async function bootstrap(
   const csvSink = options.csvSink ?? new CsvSink();
   const jsonSink = options.jsonSink ?? new JsonSink();
 
+  const humanGate = options.humanGate ?? createPanelHumanGate();
+
   const taskRunner = new TaskRunner({
     registry,
     logger,
     collectionService: collections,
+    humanGate,
   });
 
   const runtime = createRuntime({
@@ -136,7 +153,13 @@ export async function bootstrap(
       destroy() {},
     };
   } else {
-    panel = await mountApp(runtime);
+    const panelGate =
+      "attach" in humanGate
+        ? (humanGate as PanelHumanGate)
+        : undefined;
+    panel = await mountApp(runtime, {
+      ...(panelGate !== undefined ? { humanGate: panelGate } : {}),
+    });
   }
 
   logger.info("Bootstrap complete", {
@@ -144,7 +167,7 @@ export async function bootstrap(
     studioAdapter: studioAdapter !== undefined,
   });
 
-  const result: BootstrapResult = { runtime, panel };
+  const result: BootstrapResult = { runtime, panel, humanGate };
   if (studioAdapter !== undefined) {
     result.studioAdapter = studioAdapter;
   }
