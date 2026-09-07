@@ -98,7 +98,65 @@ export const STUDIO_TARGETS = {
     // assumption, calibrate on real device: alternate A/B shell marker
     selectorFallback: 'ytcp-app[data-luftballons-layout="2026_V2"]',
   },
+
+  // --- Channel basic collector anchors (FT-009) ---
+  "channel.name": {
+    id: "channel.name",
+    // assumption, calibrate on real device: channel title in Studio chrome
+    ariaLabel: "Channel name",
+    selectorFallback:
+      '[data-luftballons-target="channel.name"], ytcp-channel-name, #channel-name',
+  },
+  "dashboard.period": {
+    id: "dashboard.period",
+    // assumption, calibrate on real device: reporting period control label
+    ariaLabel: "Reporting period",
+    selectorFallback:
+      '[data-luftballons-target="dashboard.period"], [data-metric="period"]',
+  },
+  "dashboard.views": {
+    id: "dashboard.views",
+    // assumption, calibrate on real device: Dashboard views summary card
+    ariaLabel: "Views",
+    selectorFallback:
+      '[data-luftballons-target="dashboard.views"], [data-metric="views"]',
+  },
+  "dashboard.subscriberDelta": {
+    id: "dashboard.subscriberDelta",
+    // assumption, calibrate on real device: net subscribers card on Dashboard
+    ariaLabel: "Subscribers",
+    selectorFallback:
+      '[data-luftballons-target="dashboard.subscriberDelta"], [data-metric="subscriber-delta"]',
+  },
+  "analytics.views": {
+    id: "analytics.views",
+    // assumption, calibrate on real device: Analytics overview views
+    ariaLabel: "Views",
+    selectorFallback:
+      'main[data-page="ANALYTICS"] [data-luftballons-target="analytics.views"], main[data-page="ANALYTICS"] [data-metric="views"]',
+  },
+  "analytics.subscriberDelta": {
+    id: "analytics.subscriberDelta",
+    // assumption, calibrate on real device: Analytics subscriber growth
+    ariaLabel: "Subscribers",
+    selectorFallback:
+      'main[data-page="ANALYTICS"] [data-luftballons-target="analytics.subscriberDelta"], main[data-page="ANALYTICS"] [data-metric="subscriber-delta"]',
+  },
+  "content.videos.list": {
+    id: "content.videos.list",
+    // assumption, calibrate on real device: Content library table/list root
+    ariaLabel: "Channel content list",
+    selectorFallback:
+      '[data-luftballons-target="content.videos.list"], ytcp-video-section-content, table.video-table tbody',
+  },
 } as const satisfies Record<string, DomTarget>;
+
+/**
+ * Relative selector for recent-video rows under content.videos.list.
+ * assumption, calibrate on real device: row carries video id + title/views cells.
+ */
+export const CONTENT_VIDEO_ROW_SELECTOR =
+  '[data-luftballons-video-row], ytcp-video-row, tr[data-video-id]';
 
 export type StudioTargetId = keyof typeof STUDIO_TARGETS;
 
