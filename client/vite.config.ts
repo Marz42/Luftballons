@@ -22,7 +22,7 @@ export default defineConfig({
           "https://studio.youtube.com/*",
         ],
         grant: "none",
-        runAt: "document-idle",
+        "run-at": "document-idle",
       },
       build: {
         fileName: "Luftballons.user.js",
