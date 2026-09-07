@@ -130,7 +130,55 @@ function cssEscape(value: string): string {
 }
 
 /**
+ * Generic visibility (no site-specific selectors).
+ * Mirrors isActiveElement's hidden / display / visibility checks.
+ */
+export function isDomVisible(el: Element): boolean {
+  for (let node: Element | null = el; node; node = node.parentElement) {
+    if (node.hasAttribute("hidden") || node.getAttribute("aria-hidden") === "true") {
+      return false;
+    }
+    const style = node.ownerDocument.defaultView?.getComputedStyle(node);
+    if (style?.display === "none" || style?.visibility === "hidden") {
+      return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * Apply visibility + DomTarget.matches + unique across resolve branches.
+ * @param applyMatches When false (stable-attribute identity hits), skip matches —
+ *   data-luftballons-target already identifies the node; matches is for CSS/semantic
+ *   candidate disambiguation (keeps calibrated fixture shortcuts working).
+ */
+function constrainCandidates(
+  candidates: Element[],
+  target: DomTarget,
+  applyMatches = true,
+): Element | null {
+  const filtered = candidates.filter((el) => {
+    if (!isDomVisible(el)) {
+      return false;
+    }
+    if (applyMatches && target.matches && !target.matches(el)) {
+      return false;
+    }
+    return true;
+  });
+  if (filtered.length === 0) {
+    return null;
+  }
+  if (target.unique && filtered.length > 1) {
+    return null;
+  }
+  return filtered[0] ?? null;
+}
+
+/**
  * Resolve element by DomTarget priority (§9 / SPEC §13).
+ * Semantic + CSS: visibility / matches / unique.
+ * Stable attribute: visibility / unique (matches skipped — exact id identity).
  */
 export function resolveDomTarget(
   target: DomTarget,
@@ -138,18 +186,26 @@ export function resolveDomTarget(
 ): Element | null {
   // 1) Semantic: ARIA / role / visible text
   if (hasSemantic(target)) {
+    const semanticHits: Element[] = [];
     const candidates = root.querySelectorAll("*");
     for (const el of candidates) {
       if (matchesSemantic(el, target)) {
-        return el;
+        semanticHits.push(el);
       }
+    }
+    const semantic = constrainCandidates(semanticHits, target, true);
+    if (semantic) {
+      return semantic;
     }
   }
 
   // 2) Stable attribute: data-luftballons-target="<id>"
-  const byStable = root.querySelector(
-    `[data-luftballons-target="${cssEscape(target.id)}"]`,
+  const stableHits = Array.from(
+    root.querySelectorAll(
+      `[data-luftballons-target="${cssEscape(target.id)}"]`,
+    ),
   );
+  const byStable = constrainCandidates(stableHits, target, false);
   if (byStable) {
     return byStable;
   }
@@ -158,11 +214,13 @@ export function resolveDomTarget(
   const fallbacks = normalizeSelectorFallbacks(target.selectorFallback);
   for (const selector of fallbacks) {
     try {
-      const found = Array.from(root.querySelectorAll(selector))
-        .filter(el => !target.matches || target.matches(el));
-      if (target.unique && found.length > 1) return null;
-      if (found[0]) {
-        return found[0];
+      const found = constrainCandidates(
+        Array.from(root.querySelectorAll(selector)),
+        target,
+        true,
+      );
+      if (found) {
+        return found;
       }
     } catch {
       // Invalid selector → try next (fail-closed per entry)

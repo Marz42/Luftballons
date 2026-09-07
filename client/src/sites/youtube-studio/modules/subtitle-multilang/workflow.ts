@@ -8,14 +8,18 @@ import type {
   TaskResult,
   TaskWarning,
 } from "../../../../runtime/types.js";
-import type { CancellableDomService } from "../../../../services/dom-service.js";
-import type { DomTarget } from "../../../../services/dom-service.js";
+import {
+  createDomService,
+  type CancellableDomService,
+  type DomTarget,
+} from "../../../../services/dom-service.js";
 import type { CancellableNavigationService } from "../../navigation.js";
 import { NavigationError } from "../../navigation.js";
 import { detectStudio } from "../../page-detector.js";
 import {
   extractVideoIdFromHref,
   getSubtitleTarget,
+  isActiveElement,
   SUBTITLE_TARGETS,
 } from "../../selectors.js";
 import {
@@ -173,18 +177,45 @@ export async function readExistingLanguages(
 }
 
 function optionTargetFor(lang: SubtitleLanguage): DomTarget {
-  // Prefer stable code attribute — do not use bare text match (a single-option
-  // picker parent would share the same textContent as its only child).
+  // Prefer stable option markers — never bare language rows (P1-2).
   return {
     id: "subtitle.language.option",
     // assumption, calibrate on real device
     selectorFallback: [
       `[data-luftballons-subtitle-option][data-language-code="${lang.code}"]`,
       `[data-language-code="${lang.code}"][data-luftballons-subtitle-option]`,
-      `button[data-language-code="${lang.code}"]`,
-      `[data-language-code="${lang.code}"]`,
+      `button[data-luftballons-subtitle-option][data-language-code="${lang.code}"]`,
     ],
+    matches: isActiveElement,
+    unique: true,
   };
+}
+
+class UiMismatchError extends Error {
+  readonly code = "UI_MISMATCH";
+  constructor(message: string) {
+    super(message);
+    this.name = "UiMismatchError";
+  }
+}
+
+/**
+ * Unique active subtitle editor — fail closed if missing / ambiguous.
+ */
+async function requireEditor(
+  dom: CancellableDomService,
+): Promise<Element> {
+  const editor = await dom.find(getSubtitleTarget("subtitle.editor"));
+  if (!editor) {
+    throw new UiMismatchError(
+      'Unique active subtitle editor not found (assumption "subtitle.editor")',
+    );
+  }
+  return editor;
+}
+
+function scopedDom(root: ParentNode): CancellableDomService {
+  return createDomService({ root, defaultTimeoutMs: 2_000 });
 }
 
 async function addLanguage(
@@ -193,25 +224,33 @@ async function addLanguage(
   signal: AbortSignal,
 ): Promise<void> {
   throwIfAborted(signal);
+  const editor = await requireEditor(dom);
+  const editorDom = scopedDom(editor);
+
   const addBtn = getSubtitleTarget("subtitle.add_language");
-  if (!(await dom.exists(addBtn))) {
-    throw new Error(
-      `Add-language control missing (assumption target "${addBtn.id}")`,
+  if (!(await editorDom.exists(addBtn))) {
+    throw new UiMismatchError(
+      `Add-language control missing inside editor (assumption target "${addBtn.id}")`,
     );
   }
-  await dom.click(addBtn);
+  await editorDom.click(addBtn);
   throwIfAborted(signal);
 
+  // Picker must be uniquely open inside the editor — no global option fallback.
+  const pickerTarget = getSubtitleTarget("subtitle.language.picker");
+  const picker = await editorDom.find(pickerTarget);
+  if (!picker) {
+    throw new UiMismatchError(
+      'Language picker not open / not unique (assumption "subtitle.language.picker")',
+    );
+  }
+
+  const pickerDom = scopedDom(picker);
   const option = optionTargetFor(lang);
-  const found =
-    (await dom.find(option)) ??
-    (await dom.find({
-      id: "subtitle.language.option",
-      selectorFallback: `[data-language-code="${lang.code}"]`,
-    }));
+  const found = await pickerDom.find(option);
   if (!found) {
     throw new Error(
-      `Language option not found for ${lang.code} (assumption picker DOM)`,
+      `Language option not found for ${lang.code} inside open picker`,
     );
   }
   if (found instanceof HTMLElement) {
@@ -229,14 +268,16 @@ async function publishSubtitles(
   signal: AbortSignal,
 ): Promise<void> {
   throwIfAborted(signal);
+  const editor = await requireEditor(dom);
+  const editorDom = scopedDom(editor);
   const publish = getSubtitleTarget("subtitle.publish");
-  if (!(await dom.exists(publish))) {
-    throw new Error(
-      `Publish control missing (assumption target "${publish.id}")`,
+  if (!(await editorDom.exists(publish))) {
+    throw new UiMismatchError(
+      `Publish control missing inside editor (assumption target "${publish.id}")`,
     );
   }
   deps.onPublishAttempt?.();
-  await dom.click(publish);
+  await editorDom.click(publish);
 }
 
 function buildResult(
@@ -446,15 +487,19 @@ export async function runSubtitleMultilangWorkflow(
         throw error;
       }
       // SPEC §37: single-language failure must not sink the whole task
+      const message =
+        error instanceof Error ? error.message : "add failed";
+      const code =
+        error instanceof UiMismatchError ? "UI_MISMATCH" : "LANGUAGE_ADD_FAILED";
       outcomes.push({
         code: lang.code,
         label: lang.label,
         status: "FAILED",
-        detail: error instanceof Error ? error.message : "add failed",
+        detail: message,
       });
       warnings.push({
-        code: "LANGUAGE_ADD_FAILED",
-        message: `${lang.code}: ${error instanceof Error ? error.message : "add failed"}`,
+        code,
+        message: `${lang.code}: ${message}`,
       });
     }
   }

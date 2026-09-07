@@ -227,12 +227,23 @@ export const STUDIO_TARGETS = {
  * Do not remove "assumption, calibrate on real device" comments or claim verified.
  */
 export const SUBTITLE_TARGETS = {
+  "subtitle.editor": {
+    id: "subtitle.editor",
+    // assumption, calibrate on real device — unique active editor surface
+    ariaLabel: "Subtitle editor",
+    selectorFallback:
+      '[data-luftballons-target="subtitle.editor"], ytcp-uploads-dialog, main[data-page="SUBTITLES"]',
+    matches: isActiveElement,
+    unique: true,
+  },
   "subtitle.languages.list": {
     id: "subtitle.languages.list",
     // assumption, calibrate on real device
     ariaLabel: "Subtitle languages",
     selectorFallback:
       '[data-luftballons-target="subtitle.languages.list"], ytcp-uploads-dialog #language-list, #translations-list',
+    matches: isActiveElement,
+    unique: true,
   },
   "subtitle.language.item": {
     id: "subtitle.language.item",
@@ -247,6 +258,8 @@ export const SUBTITLE_TARGETS = {
     role: "button",
     selectorFallback:
       '[data-luftballons-target="subtitle.add_language"], #add-language-button, button[aria-label*="Add language"]',
+    matches: isActiveElement,
+    unique: true,
   },
   "subtitle.language.picker": {
     id: "subtitle.language.picker",
@@ -254,12 +267,17 @@ export const SUBTITLE_TARGETS = {
     ariaLabel: "Language picker",
     selectorFallback:
       '[data-luftballons-target="subtitle.language.picker"], #language-picker, tp-yt-paper-listbox',
+    matches: isActiveElement,
+    unique: true,
   },
   "subtitle.language.option": {
     id: "subtitle.language.option",
     // assumption, calibrate on real device — option row; code via data-language-code
+    // Prefer explicit option markers — never bare language rows.
     selectorFallback:
-      '[data-luftballons-subtitle-option], [data-language-code], tp-yt-paper-item',
+      '[data-luftballons-subtitle-option], [data-language-code][data-luftballons-subtitle-option], tp-yt-paper-item',
+    matches: isActiveElement,
+    unique: true,
   },
   "subtitle.publish": {
     id: "subtitle.publish",
@@ -268,6 +286,8 @@ export const SUBTITLE_TARGETS = {
     role: "button",
     selectorFallback:
       '[data-luftballons-target="subtitle.publish"], #publish-button, button[aria-label*="Publish"]',
+    matches: isActiveElement,
+    unique: true,
   },
 } as const satisfies Record<string, DomTarget>;
 

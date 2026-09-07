@@ -125,4 +125,26 @@ describe("DomService (FT-008)", () => {
       false,
     );
   });
+
+  it("semantic branch skips hidden nodes and honors unique", () => {
+    const hidden = document.createElement("button");
+    hidden.setAttribute("aria-label", "Publish");
+    hidden.hidden = true;
+    const visible = document.createElement("button");
+    visible.setAttribute("aria-label", "Publish");
+    document.body.prepend(hidden);
+    document.body.append(visible);
+
+    const target: DomTarget = {
+      id: "pub",
+      ariaLabel: "Publish",
+      unique: true,
+    };
+    expect(resolveDomTarget(target, document)).toBe(visible);
+
+    const twin = document.createElement("button");
+    twin.setAttribute("aria-label", "Publish");
+    document.body.append(twin);
+    expect(resolveDomTarget(target, document)).toBeNull();
+  });
 });

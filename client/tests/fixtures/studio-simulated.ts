@@ -114,6 +114,19 @@ export interface SubtitleFixtureData {
   omitLanguagesList?: boolean;
   /** When true, omit add / publish controls. */
   omitControls?: boolean;
+  /**
+   * P1-2a: inject a hidden document-level Publish twin with the same aria-label.
+   */
+  injectHiddenGlobalPublish?: boolean;
+  /**
+   * P1-2b: Add-language click does not open the picker (async/menu failure).
+   */
+  addLanguageNoOp?: boolean;
+  /**
+   * P1-2c: inside the open picker, also mount an "existing language row"
+   * decoy with data-language-code (must not be treated as a selectable option).
+   */
+  injectPickerExistingRowDecoy?: boolean;
 }
 
 export const DEFAULT_SUBTITLE_DATA: SubtitleFixtureData = {
@@ -199,8 +212,14 @@ export interface StudioFixtureHandle {
   setSubtitleData(data: SubtitleFixtureData | false): void;
   /** Test helper: language codes currently shown in the list. */
   getSubtitleLanguageCodes(): string[];
-  /** Click counters for fail-closed assertions (P4-T4). */
-  clickCounts: { addLanguage: number; publish: number; option: number };
+  /** Click counters for fail-closed assertions (P4-T4 / P1-2). */
+  clickCounts: {
+    addLanguage: number;
+    publish: number;
+    option: number;
+    hiddenPublish: number;
+    pickerDecoy: number;
+  };
   destroy(): void;
 }
 
@@ -337,12 +356,18 @@ function appendSubtitlesBody(
   clickCounts: StudioFixtureHandle["clickCounts"],
   onLanguagesChanged: () => void,
 ): void {
+  // assumption, calibrate on real device: active subtitle editor surface
+  const editor = document.createElement("div");
+  editor.setAttribute("data-luftballons-target", "subtitle.editor");
+  editor.setAttribute("aria-label", "Subtitle editor");
+
   const note = document.createElement("div");
   note.setAttribute("data-note", "assumption, calibrate on real device");
   note.textContent = "Simulated SUBTITLES (assumption fixture)";
-  main.append(note);
+  editor.append(note);
 
   if (data.omitLanguagesList) {
+    main.append(editor);
     return;
   }
 
@@ -363,9 +388,10 @@ function appendSubtitlesBody(
     }
   };
   renderItems();
-  main.append(list);
+  editor.append(list);
 
   if (data.omitControls) {
+    main.append(editor);
     return;
   }
 
@@ -373,6 +399,18 @@ function appendSubtitlesBody(
   picker.setAttribute("data-luftballons-target", "subtitle.language.picker");
   picker.setAttribute("aria-label", "Language picker");
   picker.hidden = true;
+
+  if (data.injectPickerExistingRowDecoy) {
+    const decoy = document.createElement("div");
+    // Looks like an existing language row (NOT an option) inside the picker.
+    decoy.setAttribute("data-luftballons-subtitle-lang", "ja");
+    decoy.setAttribute("data-language-code", "ja");
+    decoy.textContent = "日本語 (already added row decoy)";
+    decoy.addEventListener("click", () => {
+      clickCounts.pickerDecoy += 1;
+    });
+    picker.append(decoy);
+  }
 
   const pickerLangs =
     data.pickerLanguages ?? DEFAULT_SUBTITLE_DATA.pickerLanguages ?? [];
@@ -396,7 +434,7 @@ function appendSubtitlesBody(
     });
     picker.append(opt);
   }
-  main.append(picker);
+  editor.append(picker);
 
   const addBtn = document.createElement("button");
   addBtn.type = "button";
@@ -406,9 +444,11 @@ function appendSubtitlesBody(
   addBtn.textContent = "Add language";
   addBtn.addEventListener("click", () => {
     clickCounts.addLanguage += 1;
-    picker.hidden = false;
+    if (!data.addLanguageNoOp) {
+      picker.hidden = false;
+    }
   });
-  main.append(addBtn);
+  editor.append(addBtn);
 
   const publishBtn = document.createElement("button");
   publishBtn.type = "button";
@@ -420,7 +460,24 @@ function appendSubtitlesBody(
     clickCounts.publish += 1;
     // assumption: publish commits pending adds already reflected in the list
   });
-  main.append(publishBtn);
+  editor.append(publishBtn);
+
+  main.append(editor);
+
+  if (data.injectHiddenGlobalPublish) {
+    const twin = document.createElement("button");
+    twin.type = "button";
+    twin.setAttribute("aria-label", "Publish");
+    twin.setAttribute("role", "button");
+    twin.setAttribute("data-luftballons-hidden-publish-twin", "true");
+    twin.hidden = true;
+    twin.textContent = "Hidden Publish twin";
+    twin.addEventListener("click", () => {
+      clickCounts.hiddenPublish += 1;
+    });
+    // Prepend so document-order semantic match hits the twin first (P1-2a).
+    document.body.prepend(twin);
+  }
 }
 
 /**
@@ -460,7 +517,13 @@ export function mountStudioFixture(
   );
 
   let currentPage: FixturePage = page;
-  const clickCounts = { addLanguage: 0, publish: 0, option: 0 };
+  const clickCounts = {
+    addLanguage: 0,
+    publish: 0,
+    option: 0,
+    hiddenPublish: 0,
+    pickerDecoy: 0,
+  };
 
   const render = (current: FixturePage): void => {
     currentPage = current;
@@ -626,6 +689,9 @@ export function mountStudioFixture(
     },
     destroy() {
       root.remove();
+      document
+        .querySelectorAll("[data-luftballons-hidden-publish-twin]")
+        .forEach((el) => el.remove());
     },
   };
 
@@ -654,7 +720,13 @@ export function mountConflictingLayoutFixture(): StudioFixtureHandle {
   return {
     href,
     contentVariant: "A",
-    clickCounts: { addLanguage: 0, publish: 0, option: 0 },
+    clickCounts: {
+      addLanguage: 0,
+      publish: 0,
+      option: 0,
+      hiddenPublish: 0,
+      pickerDecoy: 0,
+    },
     setPage() {},
     setHref() {},
     setCollectorData() {},

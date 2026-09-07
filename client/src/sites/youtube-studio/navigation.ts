@@ -200,11 +200,11 @@ export function createNavigationService(
     }
 
     const href = getHref();
+    const videoId =
+      target === "SUBTITLES" ? extractVideoIdFromHref(href) : null;
     const navTarget = navTargetFor(target, {
       href,
-      ...(target === "SUBTITLES"
-        ? { videoId: extractVideoIdFromHref(href) ?? undefined }
-        : {}),
+      ...(videoId ? { videoId } : {}),
     });
     const el = await options.dom.find(navTarget);
     if (!el) {

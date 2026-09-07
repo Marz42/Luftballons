@@ -334,4 +334,109 @@ describe("youtube.subtitle.multilang (FT-011 / P4-T1…T5)", () => {
       ),
     ).toBe(true);
   });
+
+  it("P1-2a: hidden global Publish twin must not be clicked", async () => {
+    fixture = mountStudioFixture({
+      page: "VIDEO_DETAILS",
+      layout: "2026_V1",
+      subtitles: {
+        existingLanguages: [],
+        pickerLanguages: [{ code: "ja", label: "日本語" }],
+        injectHiddenGlobalPublish: true,
+      },
+    });
+    const mod = createFixtureSubtitleModule(fixture, {
+      initialLanguages: [{ code: "ja", label: "日本語" }],
+    });
+    const runner = makeRunner(mod, createAutoApproveGate());
+    const taskId = await runner.start("youtube.subtitle.multilang");
+    await vi.waitFor(() => {
+      expect(runner.getState(taskId)).toBe("COMPLETED");
+    });
+    // Real editor publish clicked once; hidden twin must stay at 0.
+    expect(fixture.clickCounts.publish).toBe(1);
+    expect(fixture.clickCounts.hiddenPublish).toBe(0);
+  });
+
+  it("P1-2b: picker not open → option lookup fails, stop without publish", async () => {
+    fixture = mountStudioFixture({
+      page: "VIDEO_DETAILS",
+      layout: "2026_V1",
+      subtitles: {
+        existingLanguages: [],
+        pickerLanguages: [{ code: "ja", label: "日本語" }],
+        addLanguageNoOp: true,
+      },
+    });
+    const mod = createFixtureSubtitleModule(fixture, {
+      initialLanguages: [{ code: "ja", label: "日本語" }],
+    });
+    const runner = makeRunner(mod, createAutoApproveGate());
+    const taskId = await runner.start("youtube.subtitle.multilang");
+    await vi.waitFor(() => {
+      expect(["FAILED", "PARTIAL"]).toContain(runner.getState(taskId));
+    });
+    expect(fixture.clickCounts.option).toBe(0);
+    expect(fixture.clickCounts.publish).toBe(0);
+    const result = runner.getSnapshot(taskId).result;
+    expect(
+      result?.warnings?.some((w) =>
+        ["LANGUAGE_ADD_FAILED", "UI_MISMATCH", "SUBTITLE_UI_MISMATCH"].includes(
+          w.code,
+        ),
+      ),
+    ).toBe(true);
+  });
+
+  it("P1-2c: existing language row must not be treated as picker option", async () => {
+    fixture = mountStudioFixture({
+      page: "VIDEO_DETAILS",
+      layout: "2026_V1",
+      subtitles: {
+        existingLanguages: [{ code: "ja", label: "日本語" }],
+        pickerLanguages: [], // no real options — only the list row has data-language-code=ja
+        // Target a missing language so we attempt add; option must not hit list row.
+        // Use ko which is absent from list AND picker.
+      },
+    });
+    // Override: want to add ja when ja already in list as row — actually that SKIPS.
+    // Instead: existing en row, try add ja with empty picker but en-like global codes only in list.
+    fixture.destroy();
+    fixture = mountStudioFixture({
+      page: "VIDEO_DETAILS",
+      layout: "2026_V1",
+      subtitles: {
+        existingLanguages: [{ code: "en", label: "English" }],
+        pickerLanguages: [], // picker opens empty — but list has en
+        // Attempt ja: must not click list's en (or any list row) as option
+      },
+    });
+    // Inject a decoy: list already has ja as "existing row" while picker has no ja option.
+    // Wait — if ja exists, it SKIPS. So: existing en only; we need ja option missing;
+    // global fallback `[data-language-code=ja]` must not appear. Use ko target with
+    // a list row that wrongly shares a code via a non-option element?
+    // User: "选择器内已有语言行不被当成可选项" — picker contains an "already added"
+    // language *row* decoy (not option) that must not be clicked.
+    fixture.destroy();
+    fixture = mountStudioFixture({
+      page: "VIDEO_DETAILS",
+      layout: "2026_V1",
+      subtitles: {
+        existingLanguages: [],
+        pickerLanguages: [{ code: "ja", label: "日本語" }],
+        injectPickerExistingRowDecoy: true,
+      },
+    });
+    const mod = createFixtureSubtitleModule(fixture, {
+      initialLanguages: [{ code: "ja", label: "日本語" }],
+    });
+    const runner = makeRunner(mod, createAutoApproveGate());
+    const taskId = await runner.start("youtube.subtitle.multilang");
+    await vi.waitFor(() => {
+      expect(runner.getState(taskId)).toBe("COMPLETED");
+    });
+    // Option click must hit the real option, not the decoy existing-row (decoy has no click counter on option).
+    expect(fixture.clickCounts.option).toBe(1);
+    expect(fixture.clickCounts.pickerDecoy).toBe(0);
+  });
 });
