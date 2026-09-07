@@ -1,0 +1,77 @@
+import { createRuntime, BUNDLED_DEFAULTS } from "../runtime/runtime.js";
+import { ModuleRegistry } from "../runtime/module-registry.js";
+import { TaskRunner } from "../runtime/task-runner.js";
+import { createLogger } from "../services/logger.js";
+import {
+  createChannelBasicStub,
+  createSubtitleMultilangStub,
+} from "../modules/youtube-studio-stubs.js";
+import { mountApp } from "../ui/app.js";
+import type { LuftballonsModule } from "../runtime/types.js";
+import type { Runtime } from "../runtime/runtime.js";
+import type { PanelHandle } from "../ui/panel.js";
+
+export interface BootstrapResult {
+  runtime: Runtime;
+  panel: PanelHandle;
+}
+
+export interface BootstrapOptions {
+  modules?: LuftballonsModule[];
+  mount?: boolean;
+}
+
+/**
+ * Bootstrap (SPEC §6): init Runtime → check host → register modules →
+ * load bundled defaults → render UI. No eval, no remote JS.
+ */
+export async function bootstrap(
+  options: BootstrapOptions = {},
+): Promise<BootstrapResult> {
+  const logger = createLogger({ minLevel: "INFO" });
+  const hostname =
+    typeof window !== "undefined" ? window.location.hostname : "";
+
+  logger.info("Bootstrap starting", {
+    hostname,
+    runtimeVersion: BUNDLED_DEFAULTS.runtimeVersion,
+  });
+
+  const registry = new ModuleRegistry();
+  const modules =
+    options.modules ??
+    [createChannelBasicStub(), createSubtitleMultilangStub()];
+
+  for (const module of modules) {
+    registry.register(module);
+  }
+
+  const taskRunner = new TaskRunner({
+    registry,
+    logger,
+  });
+
+  const runtime = createRuntime({
+    registry,
+    taskRunner,
+    logger,
+    config: BUNDLED_DEFAULTS,
+  });
+
+  let panel: PanelHandle;
+  if (options.mount === false) {
+    panel = {
+      open() {},
+      close() {},
+      destroy() {},
+    };
+  } else {
+    panel = await mountApp(runtime);
+  }
+
+  logger.info("Bootstrap complete", {
+    moduleCount: registry.list().length,
+  });
+
+  return { runtime, panel };
+}
