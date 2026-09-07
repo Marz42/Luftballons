@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { bootstrap } from "../../src/bootstrap/bootstrap.js";
 import type { PanelHandle } from "../../src/ui/panel.js";
 import {
@@ -7,6 +7,12 @@ import {
 } from "../fixtures/studio-simulated.js";
 import { createFixtureChannelModule } from "./channel-basic-test-utils.js";
 import { createFixtureSubtitleModule } from "./subtitle-multilang-test-utils.js";
+import { createPanelHumanGate } from "../../src/ui/human-gate.js";
+import { ModuleRegistry } from "../../src/runtime/module-registry.js";
+import { TaskRunner } from "../../src/runtime/task-runner.js";
+import { createLogger } from "../../src/services/logger.js";
+import { mountLuftballonsPanel } from "../../src/ui/panel.js";
+import { createRuntime } from "../../src/runtime/runtime.js";
 
 describe("Luftballons panel UI", () => {
   let panel: PanelHandle | undefined;
@@ -96,5 +102,59 @@ describe("Luftballons panel UI", () => {
     );
     const meta = host?.shadowRoot?.querySelector(".lb-module-meta");
     expect(meta?.textContent).toContain("UNSUPPORTED_LAYOUT");
+  });
+
+  it("destroy unsubscribes: later task events do not update DOM", async () => {
+    fixture = mountStudioFixture({ layout: "2026_V1" });
+    const registry = new ModuleRegistry();
+    registry.register(
+      createFixtureChannelModule(fixture, {
+        collectionId: "col-panel-destroy",
+        installationId: "inst-panel-destroy",
+      }),
+    );
+    const logger = createLogger({ minLevel: "ERROR", sink: () => {} });
+    const taskRunner = new TaskRunner({
+      registry,
+      logger,
+      getLocation: () => ({
+        hostname: "studio.youtube.com",
+        href: fixture!.href,
+      }),
+    });
+    const humanGate = createPanelHumanGate();
+    const runtime = createRuntime({ registry, taskRunner, logger });
+
+    panel = await mountLuftballonsPanel(runtime, document.documentElement, {
+      humanGate,
+    });
+    panel.open();
+
+    const host = document.documentElement.querySelector(
+      "[data-luftballons-root]",
+    );
+    const statusBox = host?.shadowRoot?.querySelector(
+      ".lb-status",
+    ) as HTMLElement;
+    expect(statusBox).toBeTruthy();
+    const idleText = statusBox.textContent ?? "";
+    expect(idleText).toMatch(/Idle/i);
+
+    panel.destroy();
+    panel = undefined;
+
+    expect(
+      document.documentElement.querySelector("[data-luftballons-root]"),
+    ).toBeNull();
+
+    const taskId = await taskRunner.start("youtube.channel.basic");
+    await vi.waitFor(() => {
+      expect(taskRunner.getState(taskId)).toMatch(/COMPLETED|PARTIAL|FAILED/);
+    });
+
+    // Detached status node must remain Idle — proves subscribe was removed.
+    expect(statusBox.textContent).toBe(idleText);
+    expect(statusBox.isConnected).toBe(false);
+    humanGate.detach();
   });
 });
