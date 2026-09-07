@@ -13,7 +13,17 @@ export interface DomTarget {
   role?: string;
   text?: string;
 
-  selectorFallback?: string;
+  /**
+   * CSS fallback(s). A string array is tried in order; first match wins.
+   * Single string remains supported.
+   */
+  selectorFallback?: string | string[];
+
+  /**
+   * When true, callers (e.g. waitReady) may skip waiting if the target is
+   * absent and rely on other postconditions instead of timing out.
+   */
+  optional?: boolean;
 }
 
 export interface DomService {
@@ -140,19 +150,30 @@ export function resolveDomTarget(
     return byStable;
   }
 
-  // 3) CSS fallback
-  if (target.selectorFallback) {
+  // 3) CSS fallback (string | string[] — try in order)
+  const fallbacks = normalizeSelectorFallbacks(target.selectorFallback);
+  for (const selector of fallbacks) {
     try {
-      const found = root.querySelector(target.selectorFallback);
+      const found = root.querySelector(selector);
       if (found) {
         return found;
       }
     } catch {
-      // Invalid selector → miss (fail-closed)
+      // Invalid selector → try next (fail-closed per entry)
     }
   }
 
   return null;
+}
+
+/** Normalize selectorFallback to an ordered list. */
+export function normalizeSelectorFallbacks(
+  fallback: string | string[] | undefined,
+): string[] {
+  if (fallback === undefined) {
+    return [];
+  }
+  return Array.isArray(fallback) ? fallback : [fallback];
 }
 
 function abortError(): DOMException {

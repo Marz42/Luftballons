@@ -49,6 +49,17 @@ describe("DomService (FT-008)", () => {
     expect(resolveDomTarget(target, document)).toBe(el);
   });
 
+  it("tries selectorFallback array in order", () => {
+    const second = document.createElement("div");
+    second.className = "second-hit";
+    document.body.append(second);
+    const target: DomTarget = {
+      id: "arr",
+      selectorFallback: [".missing", ".second-hit", ".also"],
+    };
+    expect(resolveDomTarget(target, document)).toBe(second);
+  });
+
   it("click and readText operate on resolved nodes", async () => {
     const btn = document.createElement("button");
     btn.setAttribute("aria-label", "Go");
