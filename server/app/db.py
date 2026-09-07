@@ -44,10 +44,12 @@ SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, futu
 
 
 def init_db(bind: Engine | None = None) -> None:
-    """Create Phase 5a tables only (installations, collections)."""
+    """Create Phase 5 tables (installations, collections, remote_config, error_logs)."""
     # Import models so metadata is populated.
     from app.models import collection as _collection  # noqa: F401
+    from app.models import error_log as _error_log  # noqa: F401
     from app.models import installation as _installation  # noqa: F401
+    from app.models import remote_config as _remote_config  # noqa: F401
 
     target = bind or engine
     Base.metadata.create_all(bind=target)

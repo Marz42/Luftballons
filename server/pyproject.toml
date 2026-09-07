@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "luftballons-server"
 version = "0.1.0"
-description = "Luftballons Phase 5a — Installation register + Collection ingest (SQLite)"
+description = "Luftballons Phase 5b — register, ingest, config, errors, admin (SQLite)"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
@@ -13,6 +13,8 @@ dependencies = [
   "uvicorn[standard]>=0.32.0",
   "sqlalchemy>=2.0.36",
   "pydantic>=2.9.0",
+  "jinja2>=3.1.4",
+  "python-multipart>=0.0.12",
 ]
 
 [project.optional-dependencies]
@@ -24,6 +26,9 @@ dev = [
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["app*"]
+
+[tool.setuptools.package-data]
+app = ["templates/*.html"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

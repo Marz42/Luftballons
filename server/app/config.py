@@ -11,7 +11,7 @@ def _default_db_path() -> Path:
 
 
 class Settings:
-    """MVP config — no remote code, data endpoints only (Phase 5a)."""
+    """MVP config — no remote code; data + declarative remote config (Phase 5b)."""
 
     api_version: str = "1"
     database_url: str

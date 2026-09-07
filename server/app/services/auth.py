@@ -48,6 +48,57 @@ def authenticate_installation(
     return installation
 
 
+def authenticate_by_token(
+    session: Session,
+    *,
+    bearer_token: str | None,
+) -> Installation:
+    """Resolve installation from Bearer alone (GET /config — no body)."""
+    if not bearer_token:
+        raise AuthError("missing bearer token")
+    digest = hash_token(bearer_token)
+    from sqlalchemy import select
+
+    installation = session.scalars(
+        select(Installation).where(Installation.token_hash == digest)
+    ).first()
+    if installation is None:
+        raise AuthError("invalid token")
+    if not installation.enabled:
+        raise AuthError("installation disabled")
+    installation.last_seen_at = utc_now()
+    return installation
+
+
+def rotate_installation_token(
+    session: Session,
+    installation_id: str,
+) -> tuple[Installation, str]:
+    """Issue a new token; old hash invalidated. Returns (row, plaintext once)."""
+    installation = session.get(Installation, installation_id)
+    if installation is None:
+        raise AuthError("unknown installation")
+    token = generate_token()
+    installation.token_hash = hash_token(token)
+    installation.last_seen_at = utc_now()
+    session.flush()
+    return installation, token
+
+
+def set_installation_enabled(
+    session: Session,
+    installation_id: str,
+    *,
+    enabled: bool,
+) -> Installation:
+    installation = session.get(Installation, installation_id)
+    if installation is None:
+        raise AuthError("unknown installation")
+    installation.enabled = enabled
+    session.flush()
+    return installation
+
+
 def register_installation(
     session: Session,
     *,
