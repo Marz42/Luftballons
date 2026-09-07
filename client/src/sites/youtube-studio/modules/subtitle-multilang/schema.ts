@@ -27,7 +27,23 @@ export type LanguageOutcomeStatus =
   | "EXISTS"
   | "SKIPPED"
   | "FAILED"
-  | "CANCELLED";
+  | "CANCELLED"
+  | "UNCONFIRMED";
+
+/**
+ * Observed row state in the subtitle languages list (assumption fixture).
+ * EXISTS is treated like PUBLISHED for skip logic (already on video).
+ */
+export type SubtitleRowState =
+  | "EXISTS"
+  | "PENDING_PUBLISH"
+  | "PUBLISHED";
+
+export interface SubtitleLanguageRow {
+  code: string;
+  label?: string;
+  state: SubtitleRowState;
+}
 
 export interface LanguageOutcome {
   code: string;
@@ -44,7 +60,10 @@ export interface SubtitleMultilangInput {
 export interface SubtitleMultilangSummary {
   videoId: string;
   outcomes: LanguageOutcome[];
-  /** True when Human Gate approved and publish ran. */
+  /**
+   * True only when Human Gate approved AND publish postcondition observed
+   * PUBLISHED for pending languages. Never true for UNCONFIRMED.
+   */
   published: boolean;
   /** True when Human Gate returned REJECTED (no WRITE_COMMIT). */
   humanRejected: boolean;

@@ -393,35 +393,6 @@ describe("youtube.subtitle.multilang (FT-011 / P4-T1…T5)", () => {
       page: "VIDEO_DETAILS",
       layout: "2026_V1",
       subtitles: {
-        existingLanguages: [{ code: "ja", label: "日本語" }],
-        pickerLanguages: [], // no real options — only the list row has data-language-code=ja
-        // Target a missing language so we attempt add; option must not hit list row.
-        // Use ko which is absent from list AND picker.
-      },
-    });
-    // Override: want to add ja when ja already in list as row — actually that SKIPS.
-    // Instead: existing en row, try add ja with empty picker but en-like global codes only in list.
-    fixture.destroy();
-    fixture = mountStudioFixture({
-      page: "VIDEO_DETAILS",
-      layout: "2026_V1",
-      subtitles: {
-        existingLanguages: [{ code: "en", label: "English" }],
-        pickerLanguages: [], // picker opens empty — but list has en
-        // Attempt ja: must not click list's en (or any list row) as option
-      },
-    });
-    // Inject a decoy: list already has ja as "existing row" while picker has no ja option.
-    // Wait — if ja exists, it SKIPS. So: existing en only; we need ja option missing;
-    // global fallback `[data-language-code=ja]` must not appear. Use ko target with
-    // a list row that wrongly shares a code via a non-option element?
-    // User: "选择器内已有语言行不被当成可选项" — picker contains an "already added"
-    // language *row* decoy (not option) that must not be clicked.
-    fixture.destroy();
-    fixture = mountStudioFixture({
-      page: "VIDEO_DETAILS",
-      layout: "2026_V1",
-      subtitles: {
         existingLanguages: [],
         pickerLanguages: [{ code: "ja", label: "日本語" }],
         injectPickerExistingRowDecoy: true,
@@ -435,8 +406,146 @@ describe("youtube.subtitle.multilang (FT-011 / P4-T1…T5)", () => {
     await vi.waitFor(() => {
       expect(runner.getState(taskId)).toBe("COMPLETED");
     });
-    // Option click must hit the real option, not the decoy existing-row (decoy has no click counter on option).
     expect(fixture.clickCounts.option).toBe(1);
     expect(fixture.clickCounts.pickerDecoy).toBe(0);
+  });
+
+  it("P1-3a: publish noop (无效) → FAILED, published=false", async () => {
+    fixture = mountStudioFixture({
+      page: "VIDEO_DETAILS",
+      layout: "2026_V1",
+      subtitles: {
+        existingLanguages: [],
+        pickerLanguages: [{ code: "ja", label: "日本語" }],
+        publishMode: "noop",
+      },
+    });
+    const mod = createFixtureSubtitleModule(fixture, {
+      initialLanguages: [{ code: "ja", label: "日本語" }],
+    });
+    const runner = makeRunner(mod, createAutoApproveGate());
+    const taskId = await runner.start("youtube.subtitle.multilang");
+    await vi.waitFor(() => {
+      expect(runner.getState(taskId)).toBe("FAILED");
+    }, { timeout: 5_000 });
+    expect(fixture.clickCounts.publish).toBe(1);
+    const result = runner.getSnapshot(taskId).result;
+    expect(result?.summary).toMatch(/PENDING_PUBLISH|FAILED/i);
+    expect(result?.summary).not.toMatch(/published=true/);
+  });
+
+  it("P1-3b: publish fail surface → FAILED, published=false", async () => {
+    fixture = mountStudioFixture({
+      page: "VIDEO_DETAILS",
+      layout: "2026_V1",
+      subtitles: {
+        existingLanguages: [],
+        pickerLanguages: [{ code: "ko", label: "한국어" }],
+        publishMode: "fail",
+      },
+    });
+    const mod = createFixtureSubtitleModule(fixture, {
+      initialLanguages: [{ code: "ko", label: "한국어" }],
+    });
+    const runner = makeRunner(mod, createAutoApproveGate());
+    const taskId = await runner.start("youtube.subtitle.multilang");
+    await vi.waitFor(() => {
+      expect(runner.getState(taskId)).toBe("FAILED");
+    });
+    expect(
+      runner.getSnapshot(taskId).result?.warnings?.some(
+        (w) => w.code === "PUBLISH_FAILED",
+      ),
+    ).toBe(true);
+    expect(runner.getSnapshot(taskId).result?.summary).not.toMatch(
+      /published=true/,
+    );
+  });
+
+  it("P1-3c: publish delay → wait for PUBLISHED then SUCCESS", async () => {
+    fixture = mountStudioFixture({
+      page: "VIDEO_DETAILS",
+      layout: "2026_V1",
+      subtitles: {
+        existingLanguages: [],
+        pickerLanguages: [{ code: "ja", label: "日本語" }],
+        publishMode: "delay",
+        publishDelayMs: 50,
+      },
+    });
+    const mod = createFixtureSubtitleModule(fixture, {
+      initialLanguages: [{ code: "ja", label: "日本語" }],
+    });
+    const runner = makeRunner(mod, createAutoApproveGate());
+    const taskId = await runner.start("youtube.subtitle.multilang");
+    await vi.waitFor(() => {
+      expect(runner.getState(taskId)).toBe("COMPLETED");
+    }, { timeout: 5_000 });
+    expect(runner.getSnapshot(taskId).result?.summary).toMatch(/published=true/);
+    expect(runner.getSnapshot(taskId).result?.summary).toMatch(/SUCCESS/);
+  });
+
+  it("P1-3d: REJECTED then re-run → pending not stacked, second publish works", async () => {
+    fixture = mountStudioFixture({
+      page: "VIDEO_DETAILS",
+      layout: "2026_V1",
+      subtitles: {
+        existingLanguages: [],
+        pickerLanguages: [{ code: "ja", label: "日本語" }],
+      },
+    });
+    const langs = [{ code: "ja", label: "日本語" }];
+    const mod = createFixtureSubtitleModule(fixture, {
+      initialLanguages: langs,
+    });
+
+    const runner1 = makeRunner(mod, createAutoRejectGate());
+    const task1 = await runner1.start("youtube.subtitle.multilang");
+    await vi.waitFor(() => {
+      expect(["COMPLETED", "CANCELLED"]).toContain(runner1.getState(task1));
+    });
+    expect(fixture.clickCounts.publish).toBe(0);
+    expect(fixture.getSubtitleLanguageCodes().filter((c) => c === "ja")).toHaveLength(
+      1,
+    );
+
+    fixture.setPage("VIDEO_DETAILS");
+    const runner2 = makeRunner(mod, createAutoApproveGate());
+    const task2 = await runner2.start("youtube.subtitle.multilang");
+    await vi.waitFor(() => {
+      expect(runner2.getState(task2)).toBe("COMPLETED");
+    });
+    expect(fixture.clickCounts.option).toBe(1); // not re-added
+    expect(fixture.clickCounts.publish).toBe(1);
+    expect(fixture.getSubtitleLanguageCodes().filter((c) => c === "ja")).toHaveLength(
+      1,
+    );
+    expect(runner2.getSnapshot(task2).result?.summary).toMatch(/published=true/);
+  });
+
+  it("P1-3e: list unreadable after publish → PARTIAL + PUBLISH_UNCONFIRMED", async () => {
+    fixture = mountStudioFixture({
+      page: "VIDEO_DETAILS",
+      layout: "2026_V1",
+      subtitles: {
+        existingLanguages: [],
+        pickerLanguages: [{ code: "es", label: "Español" }],
+        omitLanguagesListAfterPublish: true,
+      },
+    });
+    const mod = createFixtureSubtitleModule(fixture, {
+      initialLanguages: [{ code: "es", label: "Español" }],
+    });
+    const runner = makeRunner(mod, createAutoApproveGate());
+    const taskId = await runner.start("youtube.subtitle.multilang");
+    await vi.waitFor(() => {
+      expect(runner.getState(taskId)).toBe("PARTIAL");
+    }, { timeout: 5_000 });
+    const result = runner.getSnapshot(taskId).result;
+    expect(
+      result?.warnings?.some((w) => w.code === "PUBLISH_UNCONFIRMED"),
+    ).toBe(true);
+    expect(result?.summary).toMatch(/UNCONFIRMED|unconfirmed/i);
+    expect(result?.summary).not.toMatch(/published=true/);
   });
 });

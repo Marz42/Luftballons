@@ -103,8 +103,16 @@ export interface CollectorFixtureData {
  * ALL structure is assumption-marked — not live Studio evidence.
  */
 export interface SubtitleFixtureData {
-  /** Existing published language codes on the video. */
-  existingLanguages: Array<{ code: string; label: string }>;
+  /**
+   * Languages already on the video.
+   * Default state is PUBLISHED when omitted (already committed).
+   */
+  existingLanguages: Array<{
+    code: string;
+    label: string;
+    /** assumption: PUBLISHED | PENDING_PUBLISH (default PUBLISHED) */
+    state?: "PUBLISHED" | "PENDING_PUBLISH";
+  }>;
   /**
    * Available options in the Add-language picker.
    * Defaults to a small MVP set when omitted.
@@ -127,6 +135,20 @@ export interface SubtitleFixtureData {
    * decoy with data-language-code (must not be treated as a selectable option).
    */
   injectPickerExistingRowDecoy?: boolean;
+  /**
+   * P1-3: publish button behavior.
+   * - commit (default): PENDING_PUBLISH → PUBLISHED
+   * - noop: click increments counter but leaves pending (publish无效)
+   * - fail: click shows error attribute, no state change
+   * - delay: commit after publishDelayMs (async publish)
+   */
+  publishMode?: "commit" | "noop" | "fail" | "delay";
+  /** Used when publishMode === "delay". */
+  publishDelayMs?: number;
+  /**
+   * P1-3: after publish click, remove the languages list (postcondition unreadable).
+   */
+  omitLanguagesListAfterPublish?: boolean;
 }
 
 export const DEFAULT_SUBTITLE_DATA: SubtitleFixtureData = {
@@ -349,6 +371,7 @@ function appendContentBody(
 
 /**
  * assumption, calibrate on real device — minimal subtitle editor for unit tests.
+ * Row states: PUBLISHED (committed) vs PENDING_PUBLISH (added, not published).
  */
 function appendSubtitlesBody(
   main: HTMLElement,
@@ -356,6 +379,13 @@ function appendSubtitlesBody(
   clickCounts: StudioFixtureHandle["clickCounts"],
   onLanguagesChanged: () => void,
 ): void {
+  // Normalize default state for existing rows.
+  for (const lang of data.existingLanguages) {
+    if (!lang.state) {
+      lang.state = "PUBLISHED";
+    }
+  }
+
   // assumption, calibrate on real device: active subtitle editor surface
   const editor = document.createElement("div");
   editor.setAttribute("data-luftballons-target", "subtitle.editor");
@@ -380,10 +410,21 @@ function appendSubtitlesBody(
       list.removeChild(list.firstChild);
     }
     for (const lang of data.existingLanguages) {
+      const state = lang.state ?? "PUBLISHED";
       const item = document.createElement("div");
       item.setAttribute("data-luftballons-subtitle-lang", lang.code);
       item.setAttribute("data-language-code", lang.code);
-      item.textContent = lang.label;
+      // assumption, calibrate on real device: published marker on the row
+      item.setAttribute("data-subtitle-state", state);
+      if (state === "PUBLISHED") {
+        item.setAttribute("data-subtitle-published", "true");
+      } else {
+        item.removeAttribute("data-subtitle-published");
+      }
+      item.textContent =
+        state === "PENDING_PUBLISH"
+          ? `${lang.label} (pending)`
+          : lang.label;
       list.append(item);
     }
   };
@@ -405,6 +446,7 @@ function appendSubtitlesBody(
     // Looks like an existing language row (NOT an option) inside the picker.
     decoy.setAttribute("data-luftballons-subtitle-lang", "ja");
     decoy.setAttribute("data-language-code", "ja");
+    decoy.setAttribute("data-subtitle-state", "PUBLISHED");
     decoy.textContent = "日本語 (already added row decoy)";
     decoy.addEventListener("click", () => {
       clickCounts.pickerDecoy += 1;
@@ -422,14 +464,19 @@ function appendSubtitlesBody(
     opt.textContent = lang.label;
     opt.addEventListener("click", () => {
       clickCounts.option += 1;
-      const exists = data.existingLanguages.some(
+      const existing = data.existingLanguages.find(
         (l) => l.code.toLowerCase() === lang.code.toLowerCase(),
       );
-      if (!exists) {
-        data.existingLanguages.push({ ...lang });
+      if (!existing) {
+        // Add as pending — publish must flip to PUBLISHED (P1-3).
+        data.existingLanguages.push({
+          ...lang,
+          state: "PENDING_PUBLISH",
+        });
         renderItems();
         onLanguagesChanged();
       }
+      // Do not re-add if already pending or published (no stacking).
       picker.hidden = true;
     });
     picker.append(opt);
@@ -450,6 +497,16 @@ function appendSubtitlesBody(
   });
   editor.append(addBtn);
 
+  const commitPending = (): void => {
+    for (const lang of data.existingLanguages) {
+      if (lang.state === "PENDING_PUBLISH") {
+        lang.state = "PUBLISHED";
+      }
+    }
+    renderItems();
+    onLanguagesChanged();
+  };
+
   const publishBtn = document.createElement("button");
   publishBtn.type = "button";
   publishBtn.setAttribute("data-luftballons-target", "subtitle.publish");
@@ -458,7 +515,31 @@ function appendSubtitlesBody(
   publishBtn.textContent = "Publish";
   publishBtn.addEventListener("click", () => {
     clickCounts.publish += 1;
-    // assumption: publish commits pending adds already reflected in the list
+    const mode = data.publishMode ?? "commit";
+    if (mode === "noop") {
+      // Publish无效: counter bumps, pending stays pending.
+      return;
+    }
+    if (mode === "fail") {
+      publishBtn.setAttribute("data-publish-error", "true");
+      publishBtn.setAttribute("aria-invalid", "true");
+      return;
+    }
+    if (mode === "delay") {
+      const delay = data.publishDelayMs ?? 40;
+      window.setTimeout(() => {
+        commitPending();
+        if (data.omitLanguagesListAfterPublish) {
+          list.remove();
+        }
+      }, delay);
+      return;
+    }
+    // commit
+    commitPending();
+    if (data.omitLanguagesListAfterPublish) {
+      list.remove();
+    }
   });
   editor.append(publishBtn);
 

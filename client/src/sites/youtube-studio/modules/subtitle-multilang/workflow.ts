@@ -26,7 +26,9 @@ import {
   formatOutcomesSummary,
   type LanguageOutcome,
   type SubtitleLanguage,
+  type SubtitleLanguageRow,
   type SubtitleMultilangSummary,
+  type SubtitleRowState,
 } from "./schema.js";
 
 export { extractVideoIdFromHref };
@@ -141,12 +143,32 @@ function languageCodeFromElement(el: Element): string | null {
 }
 
 /**
- * Read existing language codes from the subtitle languages list.
+ * assumption, calibrate on real device:
+ * PUBLISHED = data-subtitle-state=PUBLISHED or data-subtitle-published=true;
+ * PENDING_PUBLISH = data-subtitle-state=PENDING_PUBLISH;
+ * unmarked existing row → EXISTS (treated as already on video).
+ */
+function rowStateFromElement(el: Element): SubtitleRowState {
+  const state = el.getAttribute("data-subtitle-state");
+  if (state === "PENDING_PUBLISH") {
+    return "PENDING_PUBLISH";
+  }
+  if (
+    state === "PUBLISHED" ||
+    el.getAttribute("data-subtitle-published") === "true"
+  ) {
+    return "PUBLISHED";
+  }
+  return "EXISTS";
+}
+
+/**
+ * Read language rows with publish state from the subtitle list.
  * Returns null when the list container itself is missing (UI mismatch).
  */
-export async function readExistingLanguages(
+export async function readLanguageRows(
   dom: CancellableDomService,
-): Promise<string[] | null> {
+): Promise<SubtitleLanguageRow[] | null> {
   const listTarget = getSubtitleTarget("subtitle.languages.list");
   const list = await dom.find(listTarget);
   if (!list) {
@@ -159,21 +181,71 @@ export async function readExistingLanguages(
       ? SUBTITLE_TARGETS["subtitle.language.item"].selectorFallback
       : '[data-luftballons-subtitle-lang], [data-language-code]';
 
-  const codes = new Set<string>();
+  const byCode = new Map<string, SubtitleLanguageRow>();
+  const consider = (el: Element): void => {
+    const code = languageCodeFromElement(el);
+    if (!code) {
+      return;
+    }
+    const key = code.toLowerCase();
+    if (byCode.has(key)) {
+      return;
+    }
+    byCode.set(key, {
+      code,
+      label: (el.textContent ?? "").replace(/\s+/g, " ").trim() || undefined,
+      state: rowStateFromElement(el),
+    });
+  };
+
   for (const el of list.querySelectorAll(itemSel)) {
-    const code = languageCodeFromElement(el);
-    if (code) {
-      codes.add(code);
-    }
+    consider(el);
   }
-  // Also accept direct children marked as language items under the list.
   for (const el of list.children) {
-    const code = languageCodeFromElement(el);
-    if (code) {
-      codes.add(code);
-    }
+    consider(el);
   }
-  return [...codes];
+  return [...byCode.values()];
+}
+
+/**
+ * Read existing language codes from the subtitle languages list.
+ * Returns null when the list container itself is missing (UI mismatch).
+ */
+export async function readExistingLanguages(
+  dom: CancellableDomService,
+): Promise<string[] | null> {
+  const rows = await readLanguageRows(dom);
+  if (rows === null) {
+    return null;
+  }
+  return rows.map((r) => r.code);
+}
+
+async function waitForPublishedRow(
+  dom: CancellableDomService,
+  langCode: string,
+  signal: AbortSignal,
+  timeoutMs = 2_000,
+): Promise<boolean> {
+  throwIfAborted(signal);
+  const target: DomTarget = {
+    id: `subtitle.language.published.${langCode}`,
+    // assumption, calibrate on real device
+    selectorFallback: [
+      `[data-luftballons-subtitle-lang="${langCode}"][data-subtitle-state="PUBLISHED"]`,
+      `[data-language-code="${langCode}"][data-subtitle-published="true"]`,
+      `[data-language-code="${langCode}"][data-subtitle-state="PUBLISHED"]`,
+    ],
+    matches: isActiveElement,
+    unique: true,
+  };
+  try {
+    await dom.waitFor(target, timeoutMs, signal);
+    return true;
+  } catch {
+    throwIfAborted(signal);
+    return false;
+  }
 }
 
 function optionTargetFor(lang: SubtitleLanguage): DomTarget {
@@ -302,6 +374,7 @@ function buildResult(
 
   const failed = summary.outcomes.some((o) => o.status === "FAILED");
   const cancelled = summary.outcomes.some((o) => o.status === "CANCELLED");
+  const unconfirmed = summary.outcomes.some((o) => o.status === "UNCONFIRMED");
   const anySuccess = summary.outcomes.some(
     (o) =>
       o.status === "SUCCESS" ||
@@ -309,6 +382,13 @@ function buildResult(
       o.status === "SKIPPED",
   );
 
+  if (unconfirmed) {
+    return {
+      status: "PARTIAL",
+      summary: `Subtitle multilang unconfirmed. video=${summary.videoId}; published=${summary.published}; ${line}`,
+      warnings,
+    };
+  }
   if (failed && anySuccess) {
     return {
       status: "PARTIAL",
@@ -404,11 +484,11 @@ export async function runSubtitleMultilangWorkflow(
     return bindingFailureResult(videoId, afterNav, warnings, []);
   }
 
-  // 3) read existing languages
+  // 3) read existing languages (with publish state)
   ctx.setProgress("Reading existing subtitle languages…", "RUNNING");
   throwIfAborted(ctx.signal);
-  const existing = await readExistingLanguages(deps.dom);
-  if (existing === null) {
+  const existingRows = await readLanguageRows(deps.dom);
+  if (existingRows === null) {
     // UI mismatch — fail closed, no speculative clicks
     return {
       status: "FAILED",
@@ -424,30 +504,43 @@ export async function runSubtitleMultilangWorkflow(
     };
   }
 
-  const existingSet = new Set(
-    existing.map((c) => c.toLowerCase()),
+  const rowByCode = new Map(
+    existingRows.map((r) => [r.code.toLowerCase(), r] as const),
   );
 
-  // 4) diff: exists → SKIP; absent → ADD
+  // 4) diff: PUBLISHED/EXISTS → SKIP; PENDING_PUBLISH → resume publish; absent → ADD
   const toAdd: SubtitleLanguage[] = [];
+  const alreadyPending: SubtitleLanguage[] = [];
   const outcomes: LanguageOutcome[] = [];
 
   for (const lang of targets) {
     throwIfAborted(ctx.signal);
-    if (existingSet.has(lang.code.toLowerCase())) {
+    const row = rowByCode.get(lang.code.toLowerCase());
+    if (!row) {
+      toAdd.push(lang);
+      continue;
+    }
+    if (row.state === "PENDING_PUBLISH") {
+      alreadyPending.push(lang);
       outcomes.push({
         code: lang.code,
         label: lang.label,
-        status: "SKIPPED",
-        detail: "Already present (EXISTS)",
+        status: "SUCCESS",
+        detail: "Added (pending publish)",
       });
-    } else {
-      toAdd.push(lang);
+      continue;
     }
+    // PUBLISHED or EXISTS
+    outcomes.push({
+      code: lang.code,
+      label: lang.label,
+      status: "SKIPPED",
+      detail: "Already present (EXISTS)",
+    });
   }
 
-  // Re-run / idempotent path: nothing to add → no WRITE_COMMIT needed
-  if (toAdd.length === 0) {
+  // Re-run / idempotent path: nothing to add and nothing pending → no WRITE_COMMIT
+  if (toAdd.length === 0 && alreadyPending.length === 0) {
     const summary: SubtitleMultilangSummary = {
       videoId,
       outcomes: outcomes.map((o) =>
@@ -463,44 +556,45 @@ export async function runSubtitleMultilangWorkflow(
   }
 
   // 5) prepare final state (WRITE_REVERSIBLE — add languages before commit)
-  ctx.capabilities.require("WRITE_REVERSIBLE");
-  ctx.setProgress("Adding missing languages…", "RUNNING");
-  for (const lang of toAdd) {
-    throwIfAborted(ctx.signal);
-    const beforeAdd = recheckVideoBinding(deps, videoId);
-    if (!beforeAdd.ok) {
-      return {
-        ...bindingFailureResult(videoId, beforeAdd, warnings, outcomes),
-        // keep outcomes so far in summary via warnings path
-      };
-    }
-    try {
-      await addLanguage(deps.dom, lang, ctx.signal);
-      outcomes.push({
-        code: lang.code,
-        label: lang.label,
-        status: "SUCCESS",
-        detail: "Added (pending publish)",
-      });
-    } catch (error) {
-      if (isAbortError(error) || ctx.signal.aborted) {
-        throw error;
+  if (toAdd.length > 0) {
+    ctx.capabilities.require("WRITE_REVERSIBLE");
+    ctx.setProgress("Adding missing languages…", "RUNNING");
+    for (const lang of toAdd) {
+      throwIfAborted(ctx.signal);
+      const beforeAdd = recheckVideoBinding(deps, videoId);
+      if (!beforeAdd.ok) {
+        return bindingFailureResult(videoId, beforeAdd, warnings, outcomes);
       }
-      // SPEC §37: single-language failure must not sink the whole task
-      const message =
-        error instanceof Error ? error.message : "add failed";
-      const code =
-        error instanceof UiMismatchError ? "UI_MISMATCH" : "LANGUAGE_ADD_FAILED";
-      outcomes.push({
-        code: lang.code,
-        label: lang.label,
-        status: "FAILED",
-        detail: message,
-      });
-      warnings.push({
-        code,
-        message: `${lang.code}: ${message}`,
-      });
+      try {
+        await addLanguage(deps.dom, lang, ctx.signal);
+        outcomes.push({
+          code: lang.code,
+          label: lang.label,
+          status: "SUCCESS",
+          detail: "Added (pending publish)",
+        });
+      } catch (error) {
+        if (isAbortError(error) || ctx.signal.aborted) {
+          throw error;
+        }
+        // SPEC §37: single-language failure must not sink the whole task
+        const message =
+          error instanceof Error ? error.message : "add failed";
+        const code =
+          error instanceof UiMismatchError
+            ? "UI_MISMATCH"
+            : "LANGUAGE_ADD_FAILED";
+        outcomes.push({
+          code: lang.code,
+          label: lang.label,
+          status: "FAILED",
+          detail: message,
+        });
+        warnings.push({
+          code,
+          message: `${lang.code}: ${message}`,
+        });
+      }
     }
   }
 
@@ -562,7 +656,7 @@ export async function runSubtitleMultilangWorkflow(
     return buildResult(summary, warnings);
   }
 
-  // 7) APPROVED → recheck binding, then publish + verify
+  // 7) APPROVED → recheck binding, then publish + verify PUBLISHED state
   const beforePublish = recheckVideoBinding(deps, videoId);
   if (!beforePublish.ok) {
     return bindingFailureResult(videoId, beforePublish, warnings, outcomes);
@@ -593,46 +687,124 @@ export async function runSubtitleMultilangWorkflow(
     return bindingFailureResult(videoId, afterPublishBind, warnings, outcomes);
   }
 
-  const after = await readExistingLanguages(deps.dom);
-  if (after === null) {
+  // Detect explicit publish error surface (assumption fixture).
+  const publishErr = await deps.dom.find({
+    id: "subtitle.publish.error",
+    selectorFallback:
+      '[data-luftballons-target="subtitle.publish"][data-publish-error="true"], button[aria-label="Publish"][data-publish-error="true"]',
+    matches: isActiveElement,
+    unique: true,
+  });
+  if (publishErr) {
     warnings.push({
-      code: "POSTCONDITION_UNREADABLE",
-      message: "Could not re-read language list after publish",
+      code: "PUBLISH_FAILED",
+      message: "Publish control reported an error after click",
+    });
+    const summary: SubtitleMultilangSummary = {
+      videoId,
+      outcomes: outcomes.map((o) =>
+        o.status === "SUCCESS" && o.detail === "Added (pending publish)"
+          ? {
+              ...o,
+              status: "FAILED" as const,
+              detail: "Publish failed (error surface)",
+            }
+          : o,
+      ),
+      published: false,
+      humanRejected: false,
+    };
+    return buildResult(summary, warnings);
+  }
+
+  // Postcondition: require explicit PUBLISHED — not merely a language row.
+  const finalOutcomes: LanguageOutcome[] = [];
+  let anyUnconfirmed = false;
+  let anyVerifiedPublished = false;
+
+  for (const o of outcomes) {
+    if (o.status !== "SUCCESS" || o.detail !== "Added (pending publish)") {
+      finalOutcomes.push(o);
+      continue;
+    }
+
+    const publishedOk = await waitForPublishedRow(
+      deps.dom,
+      o.code,
+      ctx.signal,
+    );
+    if (publishedOk) {
+      anyVerifiedPublished = true;
+      finalOutcomes.push({
+        ...o,
+        status: "SUCCESS",
+        detail: "Published and verified",
+      });
+      continue;
+    }
+
+    throwIfAborted(ctx.signal);
+    const afterRows = await readLanguageRows(deps.dom);
+    if (afterRows === null) {
+      anyUnconfirmed = true;
+      finalOutcomes.push({
+        ...o,
+        status: "UNCONFIRMED",
+        detail: "Publish click done; list unreadable — result unconfirmed",
+      });
+      continue;
+    }
+
+    const row = afterRows.find(
+      (r) => r.code.toLowerCase() === o.code.toLowerCase(),
+    );
+    if (row?.state === "PUBLISHED") {
+      anyVerifiedPublished = true;
+      finalOutcomes.push({
+        ...o,
+        status: "SUCCESS",
+        detail: "Published and verified",
+      });
+    } else if (row?.state === "PENDING_PUBLISH" || row) {
+      // Row present but not published — publish无效 / incomplete
+      finalOutcomes.push({
+        ...o,
+        status: "FAILED",
+        detail:
+          row.state === "PENDING_PUBLISH"
+            ? "Publish click done but row still PENDING_PUBLISH"
+            : "Publish click done but PUBLISHED state not observed",
+      });
+      warnings.push({
+        code: "PUBLISH_NOT_CONFIRMED",
+        message: `${o.code}: expected PUBLISHED, observed ${row.state}`,
+      });
+    } else {
+      finalOutcomes.push({
+        ...o,
+        status: "FAILED",
+        detail: "Publish click done but language missing from list",
+      });
+    }
+  }
+
+  if (anyUnconfirmed) {
+    warnings.push({
+      code: "PUBLISH_UNCONFIRMED",
+      message:
+        "Could not re-read language list after publish — published must not be claimed",
     });
   }
-  const afterSet = new Set((after ?? []).map((c) => c.toLowerCase()));
-
-  const finalOutcomes: LanguageOutcome[] = outcomes.map((o) => {
-    if (o.status !== "SUCCESS" || o.detail !== "Added (pending publish)") {
-      return o;
-    }
-    if (afterSet.has(o.code.toLowerCase())) {
-      return {
-        ...o,
-        status: "SUCCESS" as const,
-        detail: "Published and verified",
-      };
-    }
-    // List unreadable or code absent — do not invent success
-    if (after === null) {
-      return {
-        ...o,
-        status: "SUCCESS" as const,
-        detail: "Published (postcondition list unreadable)",
-      };
-    }
-    return {
-      ...o,
-      status: "FAILED" as const,
-      detail: "Published click done but language missing from list",
-    };
-  });
 
   const summary: SubtitleMultilangSummary = {
     videoId,
     outcomes: finalOutcomes,
-    published: true,
+    published: anyVerifiedPublished && !anyUnconfirmed,
     humanRejected: false,
   };
+  // Honest: if any UNCONFIRMED, published stays false even if others verified
+  if (anyUnconfirmed) {
+    summary.published = false;
+  }
   return buildResult(summary, warnings);
 }
