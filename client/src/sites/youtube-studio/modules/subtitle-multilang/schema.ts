@@ -69,6 +69,51 @@ export interface SubtitleMultilangSummary {
   humanRejected: boolean;
 }
 
+/**
+ * Verified label→code map for rows lacking data-language-code.
+ * assumption: only fixture-validated entries — unknown labels → UNPARSEABLE.
+ * Do not expand from live Studio without re-verification.
+ */
+export const SUBTITLE_LABEL_TO_CODE: Readonly<Record<string, string>> = {
+  English: "en",
+  英语: "en",
+  日本語: "ja",
+  한국어: "ko",
+  Español: "es",
+  Français: "fr",
+  Deutsch: "de",
+  Português: "pt",
+  "中文（简体）": "zh-Hans",
+};
+
+export type LanguageListParseKind = "EMPTY" | "READABLE" | "UNPARSEABLE";
+
+export interface LanguageListParseResult {
+  kind: LanguageListParseKind;
+  rows: SubtitleLanguageRow[];
+  /** Present when kind === UNPARSEABLE */
+  detail?: string;
+}
+
+export function resolveLanguageCodeFromLabel(label: string): string | null {
+  const trimmed = label.replace(/\s+/g, " ").trim();
+  if (!trimmed) {
+    return null;
+  }
+  // Exact key first
+  if (SUBTITLE_LABEL_TO_CODE[trimmed]) {
+    return SUBTITLE_LABEL_TO_CODE[trimmed]!;
+  }
+  // Case-insensitive English-ish keys
+  const lower = trimmed.toLowerCase();
+  for (const [k, v] of Object.entries(SUBTITLE_LABEL_TO_CODE)) {
+    if (k.toLowerCase() === lower) {
+      return v;
+    }
+  }
+  return null;
+}
+
 export function findPresetLanguage(code: string): SubtitleLanguage | undefined {
   const normalized = code.trim();
   return PRESET_SUBTITLE_LANGUAGES.find(

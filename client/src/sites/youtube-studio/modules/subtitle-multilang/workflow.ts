@@ -24,6 +24,8 @@ import {
 } from "../../selectors.js";
 import {
   formatOutcomesSummary,
+  resolveLanguageCodeFromLabel,
+  type LanguageListParseResult,
   type LanguageOutcome,
   type SubtitleLanguage,
   type SubtitleLanguageRow,
@@ -131,15 +133,28 @@ function bindingFailureResult(
   };
 }
 
-function languageCodeFromElement(el: Element): string | null {
+function languageCodeFromElement(el: Element): {
+  code: string | null;
+  unparseable: boolean;
+} {
   const attr =
     el.getAttribute("data-language-code") ??
     el.getAttribute("data-luftballons-subtitle-lang");
   if (attr && attr.trim()) {
-    return attr.trim();
+    return { code: attr.trim(), unparseable: false };
   }
-  const text = (el.textContent ?? "").replace(/\s+/g, " ").trim();
-  return text.length > 0 ? text : null;
+  // Strip trailing fixture state suffix e.g. "英语 (pending)"
+  const raw = (el.textContent ?? "").replace(/\s+/g, " ").trim();
+  const text = raw.replace(/\s*\(pending\)\s*$/i, "").trim();
+  if (!text) {
+    return { code: null, unparseable: true };
+  }
+  const mapped = resolveLanguageCodeFromLabel(text);
+  if (mapped) {
+    return { code: mapped, unparseable: false };
+  }
+  // Unknown label without code attribute — do not treat text as a BCP code
+  return { code: null, unparseable: true };
 }
 
 /**
@@ -162,34 +177,71 @@ function rowStateFromElement(el: Element): SubtitleRowState {
   return "EXISTS";
 }
 
-/**
- * Read language rows with publish state from the subtitle list.
- * Returns null when the list container itself is missing (UI mismatch).
- */
-export async function readLanguageRows(
-  dom: CancellableDomService,
-): Promise<SubtitleLanguageRow[] | null> {
-  const listTarget = getSubtitleTarget("subtitle.languages.list");
-  const list = await dom.find(listTarget);
-  if (!list) {
-    return null;
-  }
-
+function collectRowElements(list: Element): Element[] {
   const itemSel =
     typeof SUBTITLE_TARGETS["subtitle.language.item"].selectorFallback ===
     "string"
       ? SUBTITLE_TARGETS["subtitle.language.item"].selectorFallback
       : '[data-luftballons-subtitle-lang], [data-language-code]';
 
+  const seen = new Set<Element>();
+  const rows: Element[] = [];
+  for (const el of list.querySelectorAll(itemSel)) {
+    if (!seen.has(el)) {
+      seen.add(el);
+      rows.push(el);
+    }
+  }
+  for (const el of list.children) {
+    if (
+      el instanceof Element &&
+      !seen.has(el) &&
+      (el.hasAttribute("data-luftballons-subtitle-lang") ||
+        el.hasAttribute("data-language-code") ||
+        el.hasAttribute("data-luftballons-subtitle-row") ||
+        (el.textContent ?? "").trim().length > 0)
+    ) {
+      seen.add(el);
+      rows.push(el);
+    }
+  }
+  return rows;
+}
+
+/**
+ * Three-state language list parse (P2-2):
+ * EMPTY — container present, zero rows
+ * READABLE — every row yields a reliable code
+ * UNPARSEABLE — container missing OR a row cannot yield a code
+ */
+export async function parseLanguageList(
+  dom: CancellableDomService,
+): Promise<LanguageListParseResult | { kind: "MISSING" }> {
+  const listTarget = getSubtitleTarget("subtitle.languages.list");
+  const list = await dom.find(listTarget);
+  if (!list) {
+    return { kind: "MISSING" };
+  }
+
+  const elements = collectRowElements(list);
+  if (elements.length === 0) {
+    return { kind: "EMPTY", rows: [] };
+  }
+
   const byCode = new Map<string, SubtitleLanguageRow>();
-  const consider = (el: Element): void => {
-    const code = languageCodeFromElement(el);
-    if (!code) {
-      return;
+  for (const el of elements) {
+    const { code, unparseable } = languageCodeFromElement(el);
+    if (unparseable || !code) {
+      return {
+        kind: "UNPARSEABLE",
+        rows: [...byCode.values()],
+        detail:
+          "Subtitle language row missing reliable code — calibrate selectors / label map",
+      };
     }
     const key = code.toLowerCase();
     if (byCode.has(key)) {
-      return;
+      continue;
     }
     const label = (el.textContent ?? "").replace(/\s+/g, " ").trim();
     byCode.set(key, {
@@ -197,15 +249,26 @@ export async function readLanguageRows(
       state: rowStateFromElement(el),
       ...(label ? { label } : {}),
     });
-  };
+  }
+  return { kind: "READABLE", rows: [...byCode.values()] };
+}
 
-  for (const el of list.querySelectorAll(itemSel)) {
-    consider(el);
+/**
+ * Read language rows with publish state from the subtitle list.
+ * Returns null when the list container itself is missing (UI mismatch).
+ * @deprecated Prefer parseLanguageList for three-state handling.
+ */
+export async function readLanguageRows(
+  dom: CancellableDomService,
+): Promise<SubtitleLanguageRow[] | null> {
+  const parsed = await parseLanguageList(dom);
+  if (parsed.kind === "MISSING") {
+    return null;
   }
-  for (const el of list.children) {
-    consider(el);
+  if (parsed.kind === "UNPARSEABLE") {
+    return null;
   }
-  return [...byCode.values()];
+  return parsed.rows;
 }
 
 /**
@@ -220,6 +283,39 @@ export async function readExistingLanguages(
     return null;
   }
   return rows.map((r) => r.code);
+}
+
+async function waitForLanguageListSettled(
+  dom: CancellableDomService,
+  signal: AbortSignal,
+  /** Max wait while list is EMPTY (rows may still be loading). */
+  emptySettleMs = 400,
+): Promise<LanguageListParseResult | { kind: "MISSING" }> {
+  throwIfAborted(signal);
+  const first = await parseLanguageList(dom);
+  if (first.kind !== "EMPTY") {
+    return first;
+  }
+
+  const deadline = Date.now() + emptySettleMs;
+  let last: LanguageListParseResult | { kind: "MISSING" } = first;
+  while (Date.now() <= deadline) {
+    throwIfAborted(signal);
+    await new Promise<void>((resolve, reject) => {
+      const t = window.setTimeout(resolve, 20);
+      const onAbort = (): void => {
+        window.clearTimeout(t);
+        reject(new DOMException("Aborted", "AbortError"));
+      };
+      signal.addEventListener("abort", onAbort, { once: true });
+    });
+    last = await parseLanguageList(dom);
+    if (last.kind !== "EMPTY") {
+      return last;
+    }
+  }
+  // Confirmed empty after settle window — safe to treat as vacuum.
+  return last.kind === "EMPTY" ? last : last;
 }
 
 async function waitForPublishedRow(
@@ -558,11 +654,11 @@ export async function runSubtitleMultilangWorkflow(
     return bindingFailureResult(videoId, afterNav, warnings, []);
   }
 
-  // 3) read existing languages (with publish state)
+  // 3) read existing languages (three-state parse; wait if rows still loading)
   ctx.setProgress("Reading existing subtitle languages…", "RUNNING");
   throwIfAborted(ctx.signal);
-  const existingRows = await readLanguageRows(deps.dom);
-  if (existingRows === null) {
+  const parsed = await waitForLanguageListSettled(deps.dom, ctx.signal);
+  if (parsed.kind === "MISSING") {
     // UI mismatch — fail closed, no speculative clicks
     return {
       status: "FAILED",
@@ -577,7 +673,23 @@ export async function runSubtitleMultilangWorkflow(
       ],
     };
   }
+  if (parsed.kind === "UNPARSEABLE") {
+    return {
+      status: "FAILED",
+      summary:
+        "Subtitle language list unparseable — refusing to treat as empty (no add).",
+      warnings: [
+        {
+          code: "SUBTITLE_LANGUAGE_UNPARSEABLE",
+          message:
+            parsed.detail ??
+            "Calibrate subtitle.language.item / label→code map on real device",
+        },
+      ],
+    };
+  }
 
+  const existingRows = parsed.rows;
   const rowByCode = new Map(
     existingRows.map((r) => [r.code.toLowerCase(), r] as const),
   );

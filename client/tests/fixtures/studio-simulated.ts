@@ -153,6 +153,18 @@ export interface SubtitleFixtureData {
    * P1-3: after publish click, remove the languages list (postcondition unreadable).
    */
   omitLanguagesListAfterPublish?: boolean;
+  /**
+   * P2-2: render existing rows with label text only (no data-language-code).
+   */
+  labelOnlyExistingRows?: boolean;
+  /**
+   * P2-2: append an unparseable row (no code attr, unknown label).
+   */
+  injectUnparseableRow?: boolean;
+  /**
+   * P2-2: mount empty list first; append existing rows after this delay.
+   */
+  languagesListRowsDelayMs?: number;
 }
 
 export const DEFAULT_SUBTITLE_DATA: SubtitleFixtureData = {
@@ -416,8 +428,15 @@ function appendSubtitlesBody(
     for (const lang of data.existingLanguages) {
       const state = lang.state ?? "PUBLISHED";
       const item = document.createElement("div");
-      item.setAttribute("data-luftballons-subtitle-lang", lang.code);
-      item.setAttribute("data-language-code", lang.code);
+      item.setAttribute("data-luftballons-subtitle-row", "true");
+      // Label-only mode simulates Studio rows without code attrs (P2-2).
+      // Newly added PENDING rows still expose codes so option→list binding works.
+      const omitCodeAttrs =
+        data.labelOnlyExistingRows && state !== "PENDING_PUBLISH";
+      if (!omitCodeAttrs) {
+        item.setAttribute("data-luftballons-subtitle-lang", lang.code);
+        item.setAttribute("data-language-code", lang.code);
+      }
       // assumption, calibrate on real device: published marker on the row
       item.setAttribute("data-subtitle-state", state);
       if (state === "PUBLISHED") {
@@ -431,8 +450,23 @@ function appendSubtitlesBody(
           : lang.label;
       list.append(item);
     }
+    if (data.injectUnparseableRow) {
+      const bad = document.createElement("div");
+      bad.setAttribute("data-luftballons-subtitle-row", "true");
+      bad.textContent = "未知语言结构XYZ";
+      list.append(bad);
+    }
   };
-  renderItems();
+
+  if ((data.languagesListRowsDelayMs ?? 0) > 0) {
+    // Container present first; rows arrive asynchronously (P2-2).
+    window.setTimeout(() => {
+      renderItems();
+      onLanguagesChanged();
+    }, data.languagesListRowsDelayMs);
+  } else {
+    renderItems();
+  }
   editor.append(list);
 
   if (data.omitControls) {

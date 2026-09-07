@@ -629,4 +629,90 @@ describe("youtube.subtitle.multilang (FT-011 / P4-T1…T5)", () => {
       ),
     ).toBe(true);
   });
+
+  it("P2-2a: Chinese label 英语 maps to en — no duplicate add", async () => {
+    fixture = mountStudioFixture({
+      page: "VIDEO_DETAILS",
+      layout: "2026_V1",
+      subtitles: {
+        existingLanguages: [{ code: "en", label: "英语" }],
+        pickerLanguages: [
+          { code: "en", label: "English" },
+          { code: "ja", label: "日本語" },
+        ],
+        labelOnlyExistingRows: true,
+      },
+    });
+    const mod = createFixtureSubtitleModule(fixture, {
+      initialLanguages: [
+        { code: "en", label: "English" },
+        { code: "ja", label: "日本語" },
+      ],
+    });
+    const runner = makeRunner(mod, createAutoApproveGate());
+    const taskId = await runner.start("youtube.subtitle.multilang");
+    await vi.waitFor(() => {
+      expect(runner.getState(taskId)).toBe("COMPLETED");
+    }, { timeout: 8_000 });
+    const summary = runner.getSnapshot(taskId).result?.summary ?? "";
+    expect(summary).toMatch(/English\(en\) (SKIPPED|EXISTS)/);
+    expect(summary).toMatch(/日本語\(ja\) SUCCESS/);
+    expect(fixture.clickCounts.option).toBe(1); // only ja
+  }, 10_000);
+
+  it("P2-2b: unknown row structure → UNPARSEABLE stop, no add", async () => {
+    fixture = mountStudioFixture({
+      page: "VIDEO_DETAILS",
+      layout: "2026_V1",
+      subtitles: {
+        existingLanguages: [{ code: "en", label: "English" }],
+        pickerLanguages: [{ code: "ja", label: "日本語" }],
+        injectUnparseableRow: true,
+      },
+    });
+    const mod = createFixtureSubtitleModule(fixture, {
+      initialLanguages: [{ code: "ja", label: "日本語" }],
+    });
+    const runner = makeRunner(mod, createAutoApproveGate());
+    const taskId = await runner.start("youtube.subtitle.multilang");
+    await vi.waitFor(() => {
+      expect(runner.getState(taskId)).toBe("FAILED");
+    });
+    expect(fixture.clickCounts.addLanguage).toBe(0);
+    expect(
+      runner.getSnapshot(taskId).result?.warnings?.some(
+        (w) => w.code === "SUBTITLE_LANGUAGE_UNPARSEABLE",
+      ),
+    ).toBe(true);
+  });
+
+  it("P2-2c: rows load after empty container → wait then parse (not treat as empty)", async () => {
+    fixture = mountStudioFixture({
+      page: "VIDEO_DETAILS",
+      layout: "2026_V1",
+      subtitles: {
+        existingLanguages: [{ code: "en", label: "English" }],
+        pickerLanguages: [
+          { code: "en", label: "English" },
+          { code: "ja", label: "日本語" },
+        ],
+        languagesListRowsDelayMs: 80,
+      },
+    });
+    const mod = createFixtureSubtitleModule(fixture, {
+      initialLanguages: [
+        { code: "en", label: "English" },
+        { code: "ja", label: "日本語" },
+      ],
+    });
+    const runner = makeRunner(mod, createAutoApproveGate());
+    const taskId = await runner.start("youtube.subtitle.multilang");
+    await vi.waitFor(() => {
+      expect(runner.getState(taskId)).toBe("COMPLETED");
+    }, { timeout: 5_000 });
+    const summary = runner.getSnapshot(taskId).result?.summary ?? "";
+    expect(summary).toMatch(/English\(en\) (SKIPPED|EXISTS)/);
+    expect(summary).toMatch(/日本語\(ja\) SUCCESS/);
+    expect(fixture.clickCounts.option).toBe(1);
+  });
 });
