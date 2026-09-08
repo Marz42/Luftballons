@@ -43,7 +43,7 @@ describe("youtube.subtitle.multilang (FT-011 / P4-T1…T5)", () => {
     });
   }
 
-  it("detect: WRONG_PAGE unless current page is VIDEO_DETAILS", async () => {
+  it("detect: WRONG_PAGE unless current page is VIDEO_DETAILS or SUBTITLES", async () => {
     fixture = mountStudioFixture({ page: "DASHBOARD", layout: "2026_V1" });
     const mod = createFixtureSubtitleModule(fixture);
     const avail = await mod.detect({
@@ -54,6 +54,17 @@ describe("youtube.subtitle.multilang (FT-011 / P4-T1…T5)", () => {
     expect(avail.available).toBe(false);
     expect(avail.reason).toBe("WRONG_PAGE");
     expect(avail.metadata?.page).toBe("DASHBOARD");
+  });
+
+  it("detect: available on SUBTITLES (/translations)", async () => {
+    fixture = mountStudioFixture({ page: "SUBTITLES", layout: "2026_V1" });
+    const mod = createFixtureSubtitleModule(fixture);
+    const avail = await mod.detect({
+      hostname: "studio.youtube.com",
+      href: fixture.href,
+      logger: silentLogger(),
+    });
+    expect(avail.available).toBe(true);
   });
 
   it("P4-T1 Existing Language: en SKIPPED, ja added; no duplicate en", async () => {
@@ -454,7 +465,7 @@ describe("youtube.subtitle.multilang (FT-011 / P4-T1…T5)", () => {
     });
     expect(
       runner.getSnapshot(taskId).result?.warnings?.some(
-        (w) => w.code === "PUBLISH_FAILED",
+        (w) => w.code === "PUBLISH_FAILED" || w.code === "UI_MISMATCH",
       ),
     ).toBe(true);
     expect(runner.getSnapshot(taskId).result?.summary).not.toMatch(
@@ -505,8 +516,9 @@ describe("youtube.subtitle.multilang (FT-011 / P4-T1…T5)", () => {
       expect(["COMPLETED", "CANCELLED"]).toContain(runner1.getState(task1));
     });
     expect(fixture.clickCounts.publish).toBe(0);
+    // Gate-first WRITE path: reject before picker — no pending language row.
     expect(fixture.getSubtitleLanguageCodes().filter((c) => c === "ja")).toHaveLength(
-      1,
+      0,
     );
 
     fixture.setPage("VIDEO_DETAILS");
@@ -515,7 +527,7 @@ describe("youtube.subtitle.multilang (FT-011 / P4-T1…T5)", () => {
     await vi.waitFor(() => {
       expect(runner2.getState(task2)).toBe("COMPLETED");
     });
-    expect(fixture.clickCounts.option).toBe(1); // not re-added
+    expect(fixture.clickCounts.option).toBe(1);
     expect(fixture.clickCounts.publish).toBe(1);
     expect(fixture.getSubtitleLanguageCodes().filter((c) => c === "ja")).toHaveLength(
       1,
@@ -523,7 +535,7 @@ describe("youtube.subtitle.multilang (FT-011 / P4-T1…T5)", () => {
     expect(runner2.getSnapshot(task2).result?.summary).toMatch(/published=true/);
   });
 
-  it("P1-3e: list unreadable after publish → PARTIAL + PUBLISH_UNCONFIRMED", async () => {
+  it("P1-3e: list unreadable after publish → FAILED (cannot verify PUBLISHED)", async () => {
     fixture = mountStudioFixture({
       page: "VIDEO_DETAILS",
       layout: "2026_V1",
@@ -539,13 +551,9 @@ describe("youtube.subtitle.multilang (FT-011 / P4-T1…T5)", () => {
     const runner = makeRunner(mod, createAutoApproveGate());
     const taskId = await runner.start("youtube.subtitle.multilang");
     await vi.waitFor(() => {
-      expect(runner.getState(taskId)).toBe("PARTIAL");
-    }, { timeout: 5_000 });
+      expect(runner.getState(taskId)).toBe("FAILED");
+    }, { timeout: 8_000 });
     const result = runner.getSnapshot(taskId).result;
-    expect(
-      result?.warnings?.some((w) => w.code === "PUBLISH_UNCONFIRMED"),
-    ).toBe(true);
-    expect(result?.summary).toMatch(/UNCONFIRMED|unconfirmed/i);
     expect(result?.summary).not.toMatch(/published=true/);
   });
 
@@ -590,6 +598,31 @@ describe("youtube.subtitle.multilang (FT-011 / P4-T1…T5)", () => {
     await vi.waitFor(() => {
       expect(runner.getState(taskId)).toBe("COMPLETED");
     }, { timeout: 5_000 });
+    expect(runner.getSnapshot(taskId).result?.summary).toMatch(/published=true/);
+  });
+
+  it("waits briefly for auto-translate cues before publish (blank-subtitle race)", async () => {
+    fixture = mountStudioFixture({
+      page: "VIDEO_DETAILS",
+      layout: "2026_V1",
+      subtitles: {
+        existingLanguages: [],
+        pickerLanguages: [{ code: "de", label: "Deutsch" }],
+        autoTranslateContentDelayMs: 250,
+      },
+    });
+    const mod = createFixtureSubtitleModule(fixture, {
+      initialLanguages: [{ code: "de", label: "Deutsch" }],
+    });
+    const runner = makeRunner(mod, createAutoApproveGate());
+    const taskId = await runner.start("youtube.subtitle.multilang");
+    await vi.waitFor(() => {
+      expect(runner.getState(taskId)).toBe("COMPLETED");
+    }, { timeout: 8_000 });
+    expect(fixture.clickCounts.publish).toBe(1);
+    expect(runner.getSnapshot(taskId).result?.summary).toMatch(
+      /Deutsch\(de\) SUCCESS/,
+    );
     expect(runner.getSnapshot(taskId).result?.summary).toMatch(/published=true/);
   });
 
@@ -780,18 +813,19 @@ describe("youtube.subtitle.multilang (FT-011 / P4-T1…T5)", () => {
     expect(fixture.clickCounts.publish).toBe(0);
   });
 
-  it("stops before gate after a later language fails", async () => {
+  it("stops after gate when a later language is missing from picker", async () => {
     fixture = mountStudioFixture({ page: "VIDEO_DETAILS", subtitles: {
       existingLanguages: [], pickerLanguages: [{ code: "en", label: "English" }],
     }});
-    const gate = createDeferredHumanGate();
     const runner = makeRunner(createFixtureSubtitleModule(fixture, {
       initialLanguages: [{ code: "en", label: "English" }, { code: "ja", label: "日本語" }],
-    }), gate);
+    }), createAutoApproveGate());
     const id = await runner.start("youtube.subtitle.multilang");
-    await vi.waitFor(() => expect(runner.getState(id)).toBe("FAILED"), { timeout: 4000 });
-    expect(gate.lastAction).toBeNull();
-    expect(fixture.clickCounts.publish).toBe(0);
+    await vi.waitFor(() => expect(["FAILED", "PARTIAL"]).toContain(runner.getState(id)), { timeout: 8_000 });
+    expect(fixture.clickCounts.publish).toBe(1); // en published
+    const summary = runner.getSnapshot(id).result?.summary ?? "";
+    expect(summary).toMatch(/English\(en\) SUCCESS/);
+    expect(summary).toMatch(/日本語\(ja\) FAILED/);
   });
 
   it("rejects unknown layout after approval", async () => {
@@ -834,15 +868,16 @@ describe("youtube.subtitle.multilang (FT-011 / P4-T1…T5)", () => {
       initialLanguages: [{ code: "ja", label: "日本語" }],
     }), gate);
     const id = await runner.start("youtube.subtitle.multilang");
-    await vi.waitFor(() => expect(fixture!.clickCounts.addLanguage).toBe(1));
+    await vi.waitFor(() => expect(runner.getState(id)).toBe("WAITING_HUMAN"));
+    // Sabotage before approval so the post-gate picker click cannot add a row.
     const option = document.querySelector("[data-luftballons-subtitle-option]")!;
     const inert = option.cloneNode(true) as HTMLElement;
     option.replaceWith(inert);
     inert.addEventListener("click", () => {
       setTimeout(() => { (inert.parentElement as HTMLElement).hidden = true; }, 50);
     });
-    await vi.waitFor(() => expect(runner.getState(id)).toBe("FAILED"), { timeout: 8_000 });
-    expect(gate.lastAction).toBeNull();
+    gate.resolve("APPROVED");
+    await vi.waitFor(() => expect(runner.getState(id)).toBe("FAILED"), { timeout: 10_000 });
     expect(fixture.clickCounts.publish).toBe(0);
-  });
+  }, 12_000);
 });

@@ -248,14 +248,15 @@ export const SUBTITLE_TARGETS = {
   },
   "subtitle.languages.list": {
     id: "subtitle.languages.list",
-    // calibrated 2026-09-08: #ytgn-video-translations-list-table (aria-label 翻译)
-    // Fixture keeps data-luftballons-target / legacy ids.
+    // Layout A/B: ytgn-video-translations-list (+ table). Fixture: data-luftballons-target.
     ariaLabel: "翻译",
     selectorFallback: [
       "#ytgn-video-translations-list-table",
+      "ytgn-video-translations-list",
       '[data-luftballons-target="subtitle.languages.list"]',
       "ytcp-uploads-dialog #language-list",
       "#translations-list",
+      '[aria-label="可滚动的翻译"]',
     ],
     matches: isActiveElement,
     unique: true,
@@ -346,13 +347,164 @@ export const SUBTITLE_TARGETS = {
   },
   "subtitle.publish": {
     id: "subtitle.publish",
-    // assumption, calibrate on real device — WRITE_COMMIT surface
-    ariaLabel: "Publish",
+    // Layout A/B: language-editor 发布 after 自动翻译 (2026-09-08/09).
+    matches: (el) => {
+      if (!isActiveElement(el)) {
+        return false;
+      }
+      if (el.hasAttribute("disabled") || el.getAttribute("aria-disabled") === "true") {
+        return false;
+      }
+      const aria = (el.getAttribute("aria-label") ?? "").trim();
+      const text = (el.textContent ?? "").replace(/\s+/g, " ").trim();
+      return (
+        aria === "Publish" ||
+        aria === "发布" ||
+        text === "Publish" ||
+        text === "发布"
+      );
+    },
     role: "button",
-    selectorFallback:
-      '[data-luftballons-target="subtitle.publish"], #publish-button, button[aria-label*="Publish"]',
-    matches: isActiveElement,
+    selectorFallback: [
+      '[data-luftballons-target="subtitle.publish"]',
+      '#publish-button',
+      'button[aria-label="发布"]',
+      'button[aria-label="Publish"]',
+      'button[aria-label*="Publish"]',
+      "button",
+    ],
     unique: true,
+  },
+  "subtitle.captions_add": {
+    id: "subtitle.captions_add",
+    // Layout A: hover stamps ytcp-icon-button#captions-add[aria-label=添加]
+    // (may stay CSS-hidden without real :hover — ignoreVisibility).
+    ignoreVisibility: true,
+    matches: (el) => {
+      if (el.hasAttribute("disabled") || el.getAttribute("aria-disabled") === "true") {
+        return false;
+      }
+      if (el.id === "captions-add") {
+        return true;
+      }
+      // Prefer id; bare aria-label=添加 is too common for document-wide unique.
+      return false;
+    },
+    selectorFallback: [
+      '[data-luftballons-target="subtitle.captions_add"]',
+      "ytcp-icon-button#captions-add",
+      "#captions-add",
+    ],
+    unique: true,
+  },
+  "subtitle.manual_captions_add": {
+    id: "subtitle.manual_captions_add",
+    // Layout B: 手动字幕 row → #language-details-text-button-subtitles
+    matches: (el) => {
+      if (!isActiveElement(el)) {
+        return false;
+      }
+      if (el.hasAttribute("disabled") || el.getAttribute("aria-disabled") === "true") {
+        return false;
+      }
+      if (el.id === "language-details-text-button-subtitles") {
+        return true;
+      }
+      const host =
+        el.closest("#language-details-text-button-subtitles") ??
+        el.closest(".manual-subtitles-row");
+      if (!host) {
+        return false;
+      }
+      const aria = (el.getAttribute("aria-label") ?? "").trim();
+      const text = (el.textContent ?? "").replace(/\s+/g, " ").trim();
+      return aria === "添加" || text === "添加" || aria === "Add" || text === "Add";
+    },
+    selectorFallback: [
+      '[data-luftballons-target="subtitle.manual_captions_add"]',
+      "#language-details-text-button-subtitles button",
+      "#language-details-text-button-subtitles",
+      "tr.manual-subtitles-row button[aria-label='添加']",
+      "tr.manual-subtitles-row button",
+    ],
+    unique: true,
+  },
+  "subtitle.auto_translate": {
+    id: "subtitle.auto_translate",
+    matches: (el) => {
+      if (!isActiveElement(el)) {
+        return false;
+      }
+      if (el.id === "choose-auto-translate") {
+        return true;
+      }
+      const text = (el.textContent ?? "").replace(/\s+/g, " ").trim();
+      return text.includes("自动翻译") || /auto[\s-]?translate/i.test(text);
+    },
+    selectorFallback: [
+      '[data-luftballons-target="subtitle.auto_translate"]',
+      "#choose-auto-translate",
+      "button#choose-auto-translate",
+      "ytve-captions-editor-options-panel #choose-auto-translate",
+    ],
+    unique: true,
+  },
+  /**
+   * Captions body ready after 自动翻译 (publish can enable before cues load —
+   * live 2026-09-08: 无法发布空白字幕 when clicking too early).
+   */
+  "subtitle.captions.ready": {
+    id: "subtitle.captions.ready",
+    ignoreVisibility: true,
+    matches: (el) => {
+      if (el.getAttribute("data-luftballons-captions-ready") === "true") {
+        return true;
+      }
+      const text = (el.textContent ?? "").replace(/\s+/g, " ").trim();
+      if (!text || text.length < 1) {
+        return false;
+      }
+      // Reject empty-state / blank warnings as "ready".
+      if (/字幕空白|无法发布空白|blank caption/i.test(text) && text.length < 80) {
+        return false;
+      }
+      return true;
+    },
+    selectorFallback: [
+      '[data-luftballons-captions-ready="true"]',
+      "ytve-timedtext-segment",
+      ".cue-text",
+      ".timedtext-text",
+      "ytve-captions-editor [contenteditable='true']",
+      "ytve-timedtext-editor [contenteditable='true']",
+      "ytve-captions-editor textarea",
+      "ytve-timedtext-editor textarea",
+    ],
+    unique: false,
+  },
+  "subtitle.publish.blank_error": {
+    id: "subtitle.publish.blank_error",
+    matches: (el) => {
+      if (!isActiveElement(el)) {
+        return false;
+      }
+      const text = (el.textContent ?? "").replace(/\s+/g, " ").trim();
+      return (
+        text.includes("无法发布空白字幕") ||
+        text.includes("字幕空白") ||
+        /cannot publish blank/i.test(text) ||
+        /blank subtitle/i.test(text)
+      );
+    },
+    selectorFallback: [
+      '[data-luftballons-target="subtitle.publish.blank_error"]',
+      '[role="alert"]',
+      "tp-yt-paper-toast",
+      "ytcp-paper-toast",
+      "[aria-live='assertive']",
+      "[aria-live='polite']",
+    ],
+    unique: false,
   },
 } as const satisfies Record<string, DomTarget>;
 

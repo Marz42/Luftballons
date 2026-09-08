@@ -11,6 +11,7 @@ import type {
 import { abortableDelay } from "../../../../modules/step-control.js";
 import {
   createDomService,
+  querySelectorAllDeep,
   type CancellableDomService,
   type DomTarget,
 } from "../../../../services/dom-service.js";
@@ -152,7 +153,8 @@ function languageCodeFromElement(el: Element): {
   const raw = (nameCell.textContent ?? "").replace(/\s+/g, " ").trim();
   // Strip fixture `(pending)` and live Studio `（视频语言）` / `(Video language)`.
   const text = raw
-    .replace(/\s*\(pending\)\s*$/i, "")
+    .replace(/\s*\(pending\)\s*/gi, " ")
+    .replace(/\s+/g, " ")
     .replace(/\s*[（(][^）)]*[）)]\s*$/u, "")
     .trim();
   if (!text) {
@@ -354,13 +356,25 @@ async function waitForPublishedRow(
   throwIfAborted(signal);
   const target: DomTarget = {
     id: `subtitle.language.published.${langCode}`,
-    // assumption, calibrate on real device
     selectorFallback: [
       `[data-luftballons-subtitle-lang="${langCode}"][data-subtitle-state="PUBLISHED"]`,
       `[data-language-code="${langCode}"][data-subtitle-published="true"]`,
       `[data-language-code="${langCode}"][data-subtitle-state="PUBLISHED"]`,
+      '[data-subtitle-state="PUBLISHED"]',
+      "[data-luftballons-subtitle-row]",
+      "tbody tr",
+      "tr",
     ],
-    matches: isActiveElement,
+    matches: (el) => {
+      if (!isActiveElement(el)) {
+        return false;
+      }
+      if (rowStateFromElement(el) !== "PUBLISHED") {
+        return false;
+      }
+      const mapped = languageCodeFromElement(el);
+      return mapped.code?.toLowerCase() === langCode.toLowerCase();
+    },
     unique: true,
   };
   try {
@@ -368,7 +382,12 @@ async function waitForPublishedRow(
     return true;
   } catch {
     throwIfAborted(signal);
-    return false;
+    const rows = await readLanguageRows(dom);
+    return !!rows?.some(
+      (r) =>
+        r.code.toLowerCase() === langCode.toLowerCase() &&
+        r.state === "PUBLISHED",
+    );
   }
 }
 
@@ -418,7 +437,8 @@ function optionTargetFor(lang: SubtitleLanguage): DomTarget {
       }
       const code =
         el.getAttribute("data-language-code") ??
-        el.getAttribute("data-luftballons-subtitle-lang");
+        el.getAttribute("data-luftballons-subtitle-lang") ??
+        el.getAttribute("test-id");
       if (code && code.toLowerCase() === lang.code.toLowerCase()) {
         return true;
       }
@@ -549,7 +569,11 @@ async function waitPickerClosed(
     const picker = await editorDom.find(
       getSubtitleTarget("subtitle.language.picker"),
     );
-    if (!picker) {
+    if (
+      !picker ||
+      (picker instanceof HTMLElement && picker.hidden) ||
+      !isActiveElement(picker)
+    ) {
       return;
     }
     await abortableDelay(20, signal);
@@ -559,8 +583,536 @@ async function waitPickerClosed(
   );
 }
 
-async function addLanguage(
+type CaptionsEntrySurface = "list_row_hover" | "manual_dialog";
+
+/**
+ * After picker option click: Layout A → list row; Layout B → 手动字幕 dialog.
+ */
+async function waitCaptionsEntrySurface(
   dom: CancellableDomService,
+  editorDom: CancellableDomService,
+  lang: SubtitleLanguage,
+  signal: AbortSignal,
+): Promise<CaptionsEntrySurface> {
+  const deadline = Date.now() + 5_000;
+  const manual = getSubtitleTarget("subtitle.manual_captions_add");
+  while (Date.now() <= deadline) {
+    throwIfAborted(signal);
+    if ((await dom.exists(manual)) || (await editorDom.exists(manual))) {
+      return "manual_dialog";
+    }
+    const list =
+      (await dom.find(getSubtitleTarget("subtitle.languages.list"))) ??
+      (await editorDom.find(getSubtitleTarget("subtitle.languages.list")));
+    if (list) {
+      const labelAliases = labelAliasesForLanguage(lang);
+      for (const el of list.querySelectorAll(
+        "tbody tr, tr, [data-luftballons-subtitle-row], ytgn-video-translation-row",
+      )) {
+        if (!(el instanceof Element) || !isActiveElement(el)) {
+          continue;
+        }
+        if (
+          el.hasAttribute("data-luftballons-subtitle-option") ||
+          el.getAttribute("role") === "option"
+        ) {
+          continue;
+        }
+        const mapped = languageCodeFromElement(el);
+        if (mapped.code?.toLowerCase() === lang.code.toLowerCase()) {
+          return "list_row_hover";
+        }
+        const text = (el.textContent ?? "").replace(/\s+/g, " ").trim();
+        for (const alias of labelAliases) {
+          if (
+            alias &&
+            alias.toLowerCase() !== lang.code.toLowerCase() &&
+            (text === alias || text.startsWith(`${alias} `) || text.startsWith(alias))
+          ) {
+            return "list_row_hover";
+          }
+        }
+      }
+    }
+    await abortableDelay(40, signal);
+  }
+  throw new WaitTimeoutError(
+    `Neither list row nor 手动字幕 dialog appeared after selecting ${lang.code}`,
+  );
+}
+
+/** Synthetic hover for Layout A captions cell (Polymer stamps #captions-add). */
+function simulatePointerHover(el: Element): void {
+  if (!(el instanceof HTMLElement)) {
+    return;
+  }
+  const view = el.ownerDocument.defaultView ?? window;
+  const bubbled = {
+    bubbles: true,
+    cancelable: true,
+    composed: true,
+    view,
+  } as const;
+  const nonBubbling = {
+    bubbles: false,
+    cancelable: true,
+    composed: true,
+    view,
+  } as const;
+  try {
+    el.dispatchEvent(
+      new PointerEvent("pointerover", {
+        ...bubbled,
+        pointerId: 1,
+        pointerType: "mouse",
+        isPrimary: true,
+      }),
+    );
+    el.dispatchEvent(
+      new PointerEvent("pointerenter", {
+        ...nonBubbling,
+        pointerId: 1,
+        pointerType: "mouse",
+        isPrimary: true,
+      }),
+    );
+  } catch {
+    /* PointerEvent unavailable */
+  }
+  el.dispatchEvent(new MouseEvent("mouseover", bubbled));
+  el.dispatchEvent(new MouseEvent("mouseenter", nonBubbling));
+  try {
+    el.focus({ preventScroll: true });
+  } catch {
+    el.focus();
+  }
+}
+
+/**
+ * Find #captions-add inside a language row (light + open shadow).
+ * Visibility ignored — Studio may keep it CSS-hidden without real :hover.
+ */
+function findCaptionsAddInRow(row: Element): Element | null {
+  const selectors = [
+    '[data-luftballons-target="subtitle.captions_add"]',
+    "ytcp-icon-button#captions-add",
+    "#captions-add",
+  ];
+  for (const sel of selectors) {
+    const hits = querySelectorAllDeep(row, sel).filter((el) => {
+      if (
+        el.hasAttribute("disabled") ||
+        el.getAttribute("aria-disabled") === "true"
+      ) {
+        return false;
+      }
+      return (
+        el.id === "captions-add" ||
+        el.getAttribute("data-luftballons-target") === "subtitle.captions_add"
+      );
+    });
+    if (hits.length === 0) {
+      continue;
+    }
+    const inCaptions = hits.find((el) =>
+      el.closest(
+        "ytgn-video-translation-cell-captions, .tablecell-captions, ytgn-video-translation-hover-cell",
+      ),
+    );
+    return inCaptions ?? hits[0] ?? null;
+  }
+  return null;
+}
+
+function captionsHoverHosts(row: Element): Element[] {
+  const hosts: Element[] = [];
+  const captionsCell =
+    row.querySelector("ytgn-video-translation-cell-captions") ??
+    row.querySelector(".tablecell-captions");
+  if (captionsCell) {
+    hosts.push(captionsCell);
+    const hoverCell = captionsCell.querySelector(
+      "ytgn-video-translation-hover-cell",
+    );
+    if (hoverCell) {
+      hosts.push(hoverCell);
+    }
+    const cellContainer =
+      captionsCell.querySelector("#cell-container") ??
+      hoverCell?.querySelector("#cell-container");
+    if (cellContainer) {
+      hosts.push(cellContainer);
+    }
+  } else {
+    const hoverCell = row.querySelector("ytgn-video-translation-hover-cell");
+    if (hoverCell) {
+      hosts.push(hoverCell);
+      const cellContainer = hoverCell.querySelector("#cell-container");
+      if (cellContainer) {
+        hosts.push(cellContainer);
+      }
+    }
+  }
+  if (hosts.length === 0) {
+    hosts.push(row);
+  }
+  return hosts;
+}
+
+async function revealAndClickCaptionsAdd(
+  dom: CancellableDomService,
+  lang: SubtitleLanguage,
+  signal: AbortSignal,
+): Promise<void> {
+  throwIfAborted(signal);
+  let list = await dom.find(getSubtitleTarget("subtitle.languages.list"));
+  if (!list) {
+    const editor = await requireEditor(dom);
+    list = await scopedDom(editor).find(
+      getSubtitleTarget("subtitle.languages.list"),
+    );
+  }
+  if (!list) {
+    throw new UiMismatchError("Language list missing for captions-add");
+  }
+
+  const labelAliases = labelAliasesForLanguage(lang);
+  let row: Element | null = null;
+  const candidates = Array.from(
+    list.querySelectorAll(
+      "tbody tr, tr#row-container, tr, [data-luftballons-subtitle-row], ytgn-video-translation-row",
+    ),
+  );
+  for (const el of candidates) {
+    if (!(el instanceof Element)) {
+      continue;
+    }
+    const mapped = languageCodeFromElement(el);
+    if (mapped.code?.toLowerCase() === lang.code.toLowerCase()) {
+      row = el;
+      break;
+    }
+    const text = (el.textContent ?? "").replace(/\s+/g, " ").trim();
+    for (const alias of labelAliases) {
+      if (
+        alias &&
+        alias.toLowerCase() !== lang.code.toLowerCase() &&
+        (text === alias ||
+          text.startsWith(`${alias} `) ||
+          text.startsWith(alias))
+      ) {
+        row = el;
+        break;
+      }
+    }
+    if (row) {
+      break;
+    }
+  }
+  if (!row) {
+    throw new UiMismatchError(
+      `Language row for ${lang.code} not found for captions-add`,
+    );
+  }
+
+  // Force-show hover controls if Studio stamped them but CSS :hover keeps them hidden.
+  const forceStyle = row.ownerDocument.createElement("style");
+  forceStyle.setAttribute("data-luftballons-captions-hover", "true");
+  forceStyle.textContent = `
+    ytgn-video-translation-hover-cell .hover-button,
+    ytgn-video-translation-hover-cell #captions-add,
+    #cell-container #captions-add,
+    #captions-add.hover-button {
+      display: inline-flex !important;
+      visibility: visible !important;
+      opacity: 1 !important;
+      pointer-events: auto !important;
+    }
+  `;
+  row.ownerDocument.head.append(forceStyle);
+
+  try {
+    const deadline = Date.now() + 2_500;
+    let captionsAdd: Element | null = null;
+    while (Date.now() <= deadline) {
+      throwIfAborted(signal);
+      for (const host of captionsHoverHosts(row)) {
+        if (host instanceof HTMLElement) {
+          host.setAttribute("hovered", "");
+          host.classList.add("hovered");
+          try {
+            (host as HTMLElement & { hovered?: boolean }).hovered = true;
+          } catch {
+            /* ignore */
+          }
+          const rect = host.getBoundingClientRect();
+          const cx = rect.left + Math.max(rect.width / 2, 1);
+          const cy = rect.top + Math.max(rect.height / 2, 1);
+          const moveInit: MouseEventInit = {
+            bubbles: true,
+            cancelable: true,
+            composed: true,
+            view: host.ownerDocument.defaultView ?? window,
+            clientX: cx,
+            clientY: cy,
+            screenX: cx,
+            screenY: cy,
+          };
+          host.dispatchEvent(new MouseEvent("mousemove", moveInit));
+        }
+        simulatePointerHover(host);
+      }
+      captionsAdd = findCaptionsAddInRow(row);
+      if (captionsAdd) {
+        break;
+      }
+      await abortableDelay(50, signal);
+    }
+    if (!captionsAdd) {
+      // Fallback: open language details (some Layout A builds / Layout B hybrid).
+      const langOpen =
+        row.querySelector("button.language-display-name") ??
+        row.querySelector(".language-text") ??
+        row.querySelector(".tablecell-language");
+      if (langOpen instanceof HTMLElement) {
+        langOpen.click();
+        await abortableDelay(80, signal);
+        const manual = getSubtitleTarget("subtitle.manual_captions_add");
+        const auto = getSubtitleTarget("subtitle.auto_translate");
+        const fallbackDeadline = Date.now() + 2_500;
+        while (Date.now() <= fallbackDeadline) {
+          throwIfAborted(signal);
+          if (await dom.exists(manual)) {
+            await clickManualCaptionsAdd(dom, signal);
+            return;
+          }
+          if (await dom.exists(auto)) {
+            return;
+          }
+          await abortableDelay(50, signal);
+        }
+      }
+      throw new WaitTimeoutError(
+        `Captions add (#captions-add) not found for ${lang.code} after hover`,
+      );
+    }
+    if (captionsAdd instanceof HTMLElement) {
+      captionsAdd.style.visibility = "visible";
+      captionsAdd.style.opacity = "1";
+      captionsAdd.style.pointerEvents = "auto";
+      captionsAdd.click();
+    } else {
+      captionsAdd.dispatchEvent(
+        new MouseEvent("click", {
+          bubbles: true,
+          cancelable: true,
+          composed: true,
+        }),
+      );
+    }
+  } finally {
+    forceStyle.remove();
+  }
+}
+
+async function clickManualCaptionsAdd(
+  dom: CancellableDomService,
+  signal: AbortSignal,
+): Promise<void> {
+  throwIfAborted(signal);
+  const target = getSubtitleTarget("subtitle.manual_captions_add");
+  try {
+    await dom.waitFor(target, 3_000, signal);
+  } catch (error) {
+    if (isAbortError(error) || signal.aborted) {
+      throw error;
+    }
+    throw new WaitTimeoutError("手动字幕 Add control did not appear");
+  }
+  await dom.click(target);
+}
+
+async function captionsContentReady(
+  dom: CancellableDomService,
+): Promise<boolean> {
+  const ready = getSubtitleTarget("subtitle.captions.ready");
+  if (await dom.exists(ready)) {
+    return true;
+  }
+  // Deep scan: Studio cues may sit in open shadow roots.
+  const root = document;
+  const markers = querySelectorAllDeep(
+    root,
+    [
+      '[data-luftballons-captions-ready="true"]',
+      "ytve-timedtext-segment",
+      ".cue-text",
+      ".timedtext-text",
+      "ytve-captions-editor-timeline",
+      "ytve-timedtext-list",
+    ].join(", "),
+  );
+  for (const el of markers) {
+    if (el.getAttribute("data-luftballons-captions-ready") === "true") {
+      return true;
+    }
+    const text = (el.textContent ?? "").replace(/\s+/g, " ").trim();
+    if (
+      text.length >= 2 &&
+      !/字幕空白|无法发布空白|自动翻译|选择方式/i.test(text)
+    ) {
+      return true;
+    }
+  }
+  const editables = querySelectorAllDeep(
+    root,
+    [
+      "ytve-captions-editor [contenteditable='true']",
+      "ytve-timedtext-editor [contenteditable='true']",
+      "ytve-captions-editor textarea",
+      "ytve-timedtext-editor textarea",
+      "[data-luftballons-captions-editor] [contenteditable='true']",
+      "[data-luftballons-captions-editor] textarea",
+    ].join(", "),
+  );
+  for (const el of editables) {
+    const value =
+      el instanceof HTMLTextAreaElement || el instanceof HTMLInputElement
+        ? el.value
+        : (el.textContent ?? "");
+    if (value.replace(/\s+/g, " ").trim().length >= 1) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * After 发布 enables, prefer a quick content signal; if Studio DOM has no
+ * calibrated cue markers, settle briefly and continue (blank-publish retries).
+ * Do not hard-timeout for 45s — live Layout A had no matching cue selectors.
+ */
+async function settleAfterAutoTranslate(
+  dom: CancellableDomService,
+  signal: AbortSignal,
+  preferReadyMs = 2_500,
+): Promise<void> {
+  const deadline = Date.now() + preferReadyMs;
+  while (Date.now() <= deadline) {
+    throwIfAborted(signal);
+    if (await captionsContentReady(dom)) {
+      await abortableDelay(120, signal);
+      return;
+    }
+    await abortableDelay(80, signal);
+  }
+}
+
+async function blankPublishErrorVisible(
+  dom: CancellableDomService,
+): Promise<boolean> {
+  return dom.exists(getSubtitleTarget("subtitle.publish.blank_error"));
+}
+
+async function autoTranslateAndPublish(
+  dom: CancellableDomService,
+  deps: SubtitleWorkflowDeps,
+  signal: AbortSignal,
+  assertBinding: () => void,
+): Promise<void> {
+  throwIfAborted(signal);
+  assertBinding();
+  const auto = getSubtitleTarget("subtitle.auto_translate");
+  try {
+    await dom.waitFor(auto, 5_000, signal);
+  } catch (error) {
+    if (isAbortError(error) || signal.aborted) {
+      throw error;
+    }
+    throw new WaitTimeoutError("自动翻译 control did not appear");
+  }
+  await dom.click(auto);
+  throwIfAborted(signal);
+  assertBinding();
+
+  const publish = getSubtitleTarget("subtitle.publish");
+  try {
+    await dom.waitFor(publish, 8_000, signal);
+  } catch (error) {
+    if (isAbortError(error) || signal.aborted) {
+      throw error;
+    }
+    throw new WaitTimeoutError("Publish (发布) did not become available after 自动翻译");
+  }
+
+  // Prefer cue/ready signal up to ~2.5s; do not hang on unknown Studio DOM.
+  await settleAfterAutoTranslate(dom, signal);
+  throwIfAborted(signal);
+  assertBinding();
+  if (!(await dom.exists(publish))) {
+    throw new WaitTimeoutError(
+      "Publish (发布) disappeared while waiting for captions content",
+    );
+  }
+
+  const tryPublish = async (): Promise<void> => {
+    deps.onPublishAttempt?.();
+    await dom.click(publish);
+    throwIfAborted(signal);
+    const errDeadline = Date.now() + 500;
+    while (Date.now() <= errDeadline) {
+      throwIfAborted(signal);
+      if (await blankPublishErrorVisible(dom)) {
+        throw new UiMismatchError(
+          "Studio rejected publish: blank captions (无法发布空白字幕)",
+        );
+      }
+      const publishErr = await dom.find({
+        id: "subtitle.publish.error",
+        selectorFallback: [
+          '[data-luftballons-target="subtitle.publish"][data-publish-error="true"]',
+          'button[aria-label="Publish"][data-publish-error="true"]',
+          'button[aria-label="发布"][data-publish-error="true"]',
+        ],
+        matches: isActiveElement,
+      });
+      if (publishErr) {
+        throw new UiMismatchError("Publish control reported an error after click");
+      }
+      await abortableDelay(50, signal);
+    }
+  };
+
+  try {
+    await tryPublish();
+  } catch (error) {
+    if (isAbortError(error) || signal.aborted) {
+      throw error;
+    }
+    if (
+      !(error instanceof UiMismatchError) ||
+      !/blank captions|空白字幕/i.test(error.message)
+    ) {
+      throw error;
+    }
+    // Short settle + one retry (no long cue timeout).
+    await settleAfterAutoTranslate(dom, signal, 1_500);
+    throwIfAborted(signal);
+    assertBinding();
+    if (!(await dom.exists(publish))) {
+      throw error;
+    }
+    await tryPublish();
+  }
+}
+
+/**
+ * Select language from picker, then complete captions entry + auto-translate + publish.
+ * Layout A: list row → hover #captions-add. Layout B: 手动字幕 dialog Add.
+ */
+async function addTranslateAndPublishLanguage(
+  dom: CancellableDomService,
+  deps: SubtitleWorkflowDeps,
   lang: SubtitleLanguage,
   signal: AbortSignal,
   assertBinding: () => void,
@@ -571,10 +1123,7 @@ async function addLanguage(
   const editorDom = scopedDom(editor);
 
   const addBtn = getSubtitleTarget("subtitle.add_language");
-  // Live 2026-09-08: 添加语言 sits below the translations table, not inside it.
-  // Fixtures keep the control inside the editor host — try page then editor.
-  const addRoot =
-    (await dom.exists(addBtn)) ? dom : editorDom;
+  const addRoot = (await dom.exists(addBtn)) ? dom : editorDom;
   if (!(await addRoot.exists(addBtn))) {
     throw new UiMismatchError(
       `Add-language control missing (assumption target "${addBtn.id}"; not in page or editor)`,
@@ -587,7 +1136,6 @@ async function addLanguage(
   await addRoot.click(addBtn);
   throwIfAborted(signal);
 
-  // Wait: menu appears (may portal outside the table — search page-level)
   const pickerTarget = getSubtitleTarget("subtitle.language.picker");
   let picker: Element;
   try {
@@ -596,7 +1144,6 @@ async function addLanguage(
     if (isAbortError(error) || signal.aborted) {
       throw error;
     }
-    // Fixture picker is inside editor
     try {
       picker = await editorDom.waitFor(pickerTarget, 500, signal);
     } catch (inner) {
@@ -640,111 +1187,24 @@ async function addLanguage(
   }
   throwIfAborted(signal);
 
-  // Wait: add result — language appears in translations table (label-only on live).
-  const labelAliases = labelAliasesForLanguage(lang);
-  const pendingTarget: DomTarget = {
-    id: `subtitle.language.row.${lang.code}`,
-    selectorFallback: [
-      `[data-luftballons-subtitle-lang="${lang.code}"]`,
-      `[data-language-code="${lang.code}"]`,
-      "tbody tr",
-      "tr",
-    ],
-    matches: (el) => {
-      if (!isActiveElement(el)) {
-        return false;
-      }
-      if (el.closest("ytcp-navigation-drawer")) {
-        return false;
-      }
-      // Never treat picker options as translation rows (P1-2c).
-      if (
-        el.hasAttribute("data-luftballons-subtitle-option") ||
-        el.getAttribute("role") === "option" ||
-        el.closest('[data-luftballons-target="subtitle.language.picker"]')
-      ) {
-        return false;
-      }
-      if (["PENDING_PUBLISH", "PUBLISHED"].includes(rowStateFromElement(el))) {
-        const mapped = languageCodeFromElement(el);
-        if (mapped.code?.toLowerCase() === lang.code.toLowerCase()) {
-          return true;
-        }
-      }
-      const mapped = languageCodeFromElement(el);
-      if (mapped.code?.toLowerCase() === lang.code.toLowerCase()) {
-        return true;
-      }
-      // zh-Hans table cells: 韩语 / 日语 / … (may include trailing status text).
-      const text = (el.textContent ?? "").replace(/\s+/g, " ").trim();
-      for (const alias of labelAliases) {
-        if (!alias) {
-          continue;
-        }
-        // Bare BCP codes only match exactly — avoid "en" prefix false positives.
-        if (alias.toLowerCase() === lang.code.toLowerCase()) {
-          if (text === alias || text.toLowerCase() === alias.toLowerCase()) {
-            return true;
-          }
-          continue;
-        }
-        if (
-          text === alias ||
-          text.startsWith(`${alias} `) ||
-          text.startsWith(alias)
-        ) {
-          return true;
-        }
-      }
-      return false;
-    },
-    unique: true,
-  };
+  const surface = await waitCaptionsEntrySurface(dom, editorDom, lang, signal);
   try {
-    const list =
-      (await dom.find(getSubtitleTarget("subtitle.languages.list"))) ??
-      (await editorDom.find(getSubtitleTarget("subtitle.languages.list")));
-    if (!list) {
-      throw new UiMismatchError("Language list missing");
-    }
-    // Live Studio may only keep a transient draft row without uploaded captions.
-    await scopedDom(list).waitFor(pendingTarget, 4_000, signal);
-  } catch (error) {
-    if (isAbortError(error) || signal.aborted) {
-      throw error;
-    }
-    throw new WaitTimeoutError(
-      `Language row for ${lang.code} did not appear after option click`,
-    );
-  }
-
-  // Wait: picker closed / editor operable before next language
-  try {
-    await waitPickerClosed(dom, signal);
+    await waitPickerClosed(dom, signal, 1_500);
   } catch {
-    await waitPickerClosed(editorDom, signal);
+    try {
+      await waitPickerClosed(editorDom, signal, 500);
+    } catch {
+      /* Layout B may keep chrome; continue */
+    }
   }
-}
 
-async function publishSubtitles(
-  dom: CancellableDomService,
-  deps: SubtitleWorkflowDeps,
-  signal: AbortSignal,
-  assertBinding: () => void,
-): Promise<void> {
-  throwIfAborted(signal);
-  const editor = await requireEditor(dom);
-  const editorDom = scopedDom(editor);
-  const publish = getSubtitleTarget("subtitle.publish");
-  if (!(await editorDom.exists(publish))) {
-    throw new UiMismatchError(
-      `Publish control missing inside editor (assumption target "${publish.id}")`,
-    );
-  }
   assertBinding();
-  if (!editor.isConnected || !isActiveElement(editor)) throw new UiMismatchError("Editor detached or inactive");
-  deps.onPublishAttempt?.();
-  await editorDom.click(publish);
+  if (surface === "manual_dialog") {
+    await clickManualCaptionsAdd(dom, signal);
+  } else {
+    await revealAndClickCaptionsAdd(dom, lang, signal);
+  }
+  await autoTranslateAndPublish(dom, deps, signal, assertBinding);
 }
 
 function buildResult(
@@ -971,133 +1431,22 @@ export async function runSubtitleMultilangWorkflow(
     return buildResult(summary, warnings);
   }
 
-  // 5) prepare final state (WRITE_REVERSIBLE — add languages before commit)
-  if (toAdd.length > 0) {
-    ctx.capabilities.require("WRITE_REVERSIBLE");
-    ctx.setProgress("Adding missing languages…", "RUNNING");
-    for (const lang of toAdd) {
-      throwIfAborted(ctx.signal);
-      const beforeAdd = recheckVideoBinding(deps, videoId);
-      if (!beforeAdd.ok) {
-        return bindingFailureResult(videoId, beforeAdd, warnings, outcomes);
-      }
-      try {
-        await addLanguage(deps.dom, lang, ctx.signal, assertBinding);
-        outcomes.push({
-          code: lang.code,
-          label: lang.label,
-          status: "SUCCESS",
-          detail: "Added (pending publish)",
-        });
-      } catch (error) {
-        if (isAbortError(error) || ctx.signal.aborted) {
-          throw error;
-        }
-        const message =
-          error instanceof Error ? error.message : "add failed";
-        const code =
-          error instanceof UiMismatchError
-            ? "UI_MISMATCH"
-            : error instanceof WaitTimeoutError
-              ? "WAIT_TIMEOUT"
-              : "LANGUAGE_ADD_FAILED";
-        outcomes.push({
-          code: lang.code,
-          label: lang.label,
-          status: "FAILED",
-          detail: message,
-        });
-        warnings.push({
-          code,
-          message: `${lang.code}: ${message}`,
-        });
-        // P2-1: wait/recovery failure → stop; do not continue next language
-        if (
-          error instanceof WaitTimeoutError ||
-          error instanceof UiMismatchError
-        ) {
-          for (const rest of toAdd.slice(toAdd.indexOf(lang) + 1)) {
-            outcomes.push({
-              code: rest.code,
-              label: rest.label,
-              status: "CANCELLED",
-              detail: "Stopped after prior language wait/UI failure",
-            });
-          }
-          return {
-            status: "FAILED",
-            summary: `Subtitle workflow stopped before publish; pending changes retained. ${formatOutcomesSummary(outcomes)}`,
-            warnings,
-          };
-        }
-      }
-    }
-  }
+  // 5) Human Gate once, then per-language: add → captions (A/B) → 自动翻译 → 发布
+  const workQueue: SubtitleLanguage[] = [...alreadyPending, ...toAdd];
 
-  const pendingPublish = outcomes.filter(
-    (o) => o.status === "SUCCESS" && o.detail === "Added (pending publish)",
-  );
-  if (pendingPublish.length === 0) {
-    const summary: SubtitleMultilangSummary = {
-      videoId,
-      outcomes,
-      published: false,
-      humanRejected: false,
-    };
-    return buildResult(summary, warnings);
-  }
-
-  // Fail closed before Human Gate when WRITE_COMMIT surface is not calibrated.
-  // Live zh-Hans Studio: 发布 lives on the per-language editor after
-  // 手动字幕 → 自动翻译 — not on the translations list table (2026-09-08).
-  try {
-    const editor = await requireEditor(deps.dom);
-    const publish = getSubtitleTarget("subtitle.publish");
-    if (!(await scopedDom(editor).exists(publish))) {
-      return {
-        status: "FAILED",
-        summary:
-          "Cannot publish: list-page Publish control missing (待校准). Languages were added but not published; pending changes retained.",
-        warnings: [
-          ...warnings,
-          {
-            code: "PUBLISH_SURFACE_MISSING",
-            message:
-              'subtitle.publish not found on translations list. Real Studio WRITE_COMMIT is language-editor 发布 after 手动字幕 → 自动翻译 — not automated yet.',
-          },
-        ],
-      };
-    }
-  } catch (error) {
-    if (isAbortError(error) || ctx.signal.aborted) {
-      throw error;
-    }
-    const message =
-      error instanceof Error ? error.message : "publish surface check failed";
-    return {
-      status: "FAILED",
-      summary: `Cannot publish before Human Gate: ${message}`,
-      warnings: [
-        ...warnings,
-        { code: "PUBLISH_SURFACE_MISSING", message },
-      ],
-    };
-  }
-
-  // 6) WRITE_COMMIT → Human Gate
+  ctx.capabilities.require("WRITE_REVERSIBLE");
   ctx.capabilities.require("WRITE_COMMIT");
-  const consequenceLines = pendingPublish.map(
-    (o) => `${o.label} (${o.code})`,
-  );
+  const consequenceLines = workQueue.map((o) => `${o.label} (${o.code})`);
   ctx.setProgress("Waiting for human confirmation…", "WAITING_HUMAN");
   const decision = await ctx.humanGate.request(
     {
       capability: "WRITE_COMMIT",
       title: "Publish subtitle languages",
-      description: `Publish the following subtitle languages on video ${videoId}. This action cannot be undone from Luftballons.`,
+      description: `Add & publish the following subtitle languages on video ${videoId} via Studio auto-translate. This action cannot be undone from Luftballons.`,
       consequences: [
         ...consequenceLines,
         "不可撤销 / irreversible WRITE_COMMIT",
+        "Languages are processed one-at-a-time (Studio card / hover-add path)",
       ],
       reversible: false,
     },
@@ -1107,51 +1456,132 @@ export async function runSubtitleMultilangWorkflow(
   if (ctx.signal.aborted) {
     throw new DOMException("Aborted", "AbortError");
   }
-
   ctx.setProgress("Resuming…", "RUNNING");
 
-  // 8) REJECTED → no commit
   if (decision === "REJECTED") {
-    const summary: SubtitleMultilangSummary = {
-      videoId,
-      outcomes: outcomes.map((o) =>
-        o.status === "SUCCESS" && o.detail === "Added (pending publish)"
-          ? {
-              ...o,
-              status: "CANCELLED" as const,
-              detail: "Human Gate REJECTED — not published",
-            }
-          : o,
-      ),
-      published: false,
-      humanRejected: true,
-    };
-    return buildResult(summary, warnings);
-  }
-
-  // 7) APPROVED → recheck binding, then publish + verify PUBLISHED state
-  const beforePublish = recheckVideoBinding(deps, videoId);
-  if (!beforePublish.ok) {
-    return bindingFailureResult(videoId, beforePublish, warnings, outcomes);
-  }
-
-  ctx.setProgress("Publishing…", "RUNNING");
-  try {
-    await publishSubtitles(deps.dom, deps, ctx.signal, assertBinding);
-  } catch (error) {
-    if (isAbortError(error) || ctx.signal.aborted) {
-      throw error;
+    for (const lang of workQueue) {
+      const idx = outcomes.findIndex(
+        (o) => o.code.toLowerCase() === lang.code.toLowerCase(),
+      );
+      if (idx >= 0) {
+        outcomes[idx] = {
+          ...outcomes[idx]!,
+          status: "CANCELLED",
+          detail: "Human Gate REJECTED — not published",
+        };
+      } else {
+        outcomes.push({
+          code: lang.code,
+          label: lang.label,
+          status: "CANCELLED",
+          detail: "Human Gate REJECTED — not published",
+        });
+      }
     }
-    const message =
-      error instanceof Error ? error.message : "publish failed";
-    return {
-      status: "FAILED",
-      summary: `Publish failed after approval: ${message}`,
-      warnings: [
-        ...warnings,
-        { code: "PUBLISH_FAILED", message },
-      ],
-    };
+    return buildResult(
+      {
+        videoId,
+        outcomes,
+        published: false,
+        humanRejected: true,
+      },
+      warnings,
+    );
+  }
+
+  for (let i = outcomes.length - 1; i >= 0; i--) {
+    if (
+      outcomes[i]!.status === "SUCCESS" &&
+      outcomes[i]!.detail === "Added (pending publish)"
+    ) {
+      outcomes.splice(i, 1);
+    }
+  }
+
+  let publishedAny = false;
+  for (let i = 0; i < workQueue.length; i++) {
+    const lang = workQueue[i]!;
+    throwIfAborted(ctx.signal);
+    const before = recheckVideoBinding(deps, videoId);
+    if (!before.ok) {
+      return bindingFailureResult(videoId, before, warnings, outcomes);
+    }
+    ctx.setProgress(`Adding & publishing ${lang.label}…`, "RUNNING");
+    try {
+      const alreadyInList = alreadyPending.some(
+        (p) => p.code.toLowerCase() === lang.code.toLowerCase(),
+      );
+      if (alreadyInList) {
+        try {
+          await revealAndClickCaptionsAdd(deps.dom, lang, ctx.signal);
+        } catch {
+          await clickManualCaptionsAdd(deps.dom, ctx.signal);
+        }
+        await autoTranslateAndPublish(
+          deps.dom,
+          deps,
+          ctx.signal,
+          assertBinding,
+        );
+      } else {
+        await addTranslateAndPublishLanguage(
+          deps.dom,
+          deps,
+          lang,
+          ctx.signal,
+          assertBinding,
+        );
+      }
+      const publishedOk = await waitForPublishedRow(
+        deps.dom,
+        lang.code,
+        ctx.signal,
+      );
+      if (!publishedOk) {
+        throw new UiMismatchError(
+          `Publish clicked but PUBLISHED state not observed for ${lang.code}`,
+        );
+      }
+      outcomes.push({
+        code: lang.code,
+        label: lang.label,
+        status: "SUCCESS",
+        detail: "Added + auto-translated + published",
+      });
+      publishedAny = true;
+    } catch (error) {
+      if (isAbortError(error) || ctx.signal.aborted) {
+        throw error;
+      }
+      const message =
+        error instanceof Error ? error.message : "language write failed";
+      const code =
+        error instanceof UiMismatchError
+          ? "UI_MISMATCH"
+          : error instanceof WaitTimeoutError
+            ? "WAIT_TIMEOUT"
+            : "LANGUAGE_ADD_FAILED";
+      outcomes.push({
+        code: lang.code,
+        label: lang.label,
+        status: "FAILED",
+        detail: message,
+      });
+      warnings.push({ code, message: `${lang.code}: ${message}` });
+      for (const rest of workQueue.slice(i + 1)) {
+        outcomes.push({
+          code: rest.code,
+          label: rest.label,
+          status: "CANCELLED",
+          detail: "Stopped after prior language wait/UI failure",
+        });
+      }
+      return {
+        status: "FAILED",
+        summary: `Subtitle workflow stopped; pending changes retained. ${formatOutcomesSummary(outcomes)}`,
+        warnings,
+      };
+    }
   }
 
   throwIfAborted(ctx.signal);
@@ -1160,124 +1590,13 @@ export async function runSubtitleMultilangWorkflow(
     return bindingFailureResult(videoId, afterPublishBind, warnings, outcomes);
   }
 
-  // Detect explicit publish error surface (assumption fixture).
-  const publishErr = await deps.dom.find({
-    id: "subtitle.publish.error",
-    selectorFallback:
-      '[data-luftballons-target="subtitle.publish"][data-publish-error="true"], button[aria-label="Publish"][data-publish-error="true"]',
-    matches: isActiveElement,
-    unique: true,
-  });
-  if (publishErr) {
-    warnings.push({
-      code: "PUBLISH_FAILED",
-      message: "Publish control reported an error after click",
-    });
-    const summary: SubtitleMultilangSummary = {
+  return buildResult(
+    {
       videoId,
-      outcomes: outcomes.map((o) =>
-        o.status === "SUCCESS" && o.detail === "Added (pending publish)"
-          ? {
-              ...o,
-              status: "FAILED" as const,
-              detail: "Publish failed (error surface)",
-            }
-          : o,
-      ),
-      published: false,
+      outcomes,
+      published: publishedAny,
       humanRejected: false,
-    };
-    return buildResult(summary, warnings);
-  }
-
-  // Postcondition: require explicit PUBLISHED — not merely a language row.
-  const finalOutcomes: LanguageOutcome[] = [];
-  let anyUnconfirmed = false;
-  let anyVerifiedPublished = false;
-
-  for (const o of outcomes) {
-    if (o.status !== "SUCCESS" || o.detail !== "Added (pending publish)") {
-      finalOutcomes.push(o);
-      continue;
-    }
-
-    const publishedOk = await waitForPublishedRow(
-      deps.dom,
-      o.code,
-      ctx.signal,
-    );
-    if (publishedOk) {
-      anyVerifiedPublished = true;
-      finalOutcomes.push({
-        ...o,
-        status: "SUCCESS",
-        detail: "Published and verified",
-      });
-      continue;
-    }
-
-    throwIfAborted(ctx.signal);
-    const afterRows = await readLanguageRows(deps.dom);
-    if (afterRows === null) {
-      anyUnconfirmed = true;
-      finalOutcomes.push({
-        ...o,
-        status: "UNCONFIRMED",
-        detail: "Publish click done; list unreadable — result unconfirmed",
-      });
-      continue;
-    }
-
-    const row = afterRows.find(
-      (r) => r.code.toLowerCase() === o.code.toLowerCase(),
-    );
-    if (row?.state === "PUBLISHED") {
-      anyVerifiedPublished = true;
-      finalOutcomes.push({
-        ...o,
-        status: "SUCCESS",
-        detail: "Published and verified",
-      });
-    } else if (row?.state === "PENDING_PUBLISH" || row) {
-      // Row present but not published — publish无效 / incomplete
-      finalOutcomes.push({
-        ...o,
-        status: "FAILED",
-        detail:
-          row.state === "PENDING_PUBLISH"
-            ? "Publish click done but row still PENDING_PUBLISH"
-            : "Publish click done but PUBLISHED state not observed",
-      });
-      warnings.push({
-        code: "PUBLISH_NOT_CONFIRMED",
-        message: `${o.code}: expected PUBLISHED, observed ${row.state}`,
-      });
-    } else {
-      finalOutcomes.push({
-        ...o,
-        status: "FAILED",
-        detail: "Publish click done but language missing from list",
-      });
-    }
-  }
-
-  if (anyUnconfirmed) {
-    warnings.push({
-      code: "PUBLISH_UNCONFIRMED",
-      message:
-        "Could not re-read language list after publish — published must not be claimed",
-    });
-  }
-
-  const summary: SubtitleMultilangSummary = {
-    videoId,
-    outcomes: finalOutcomes,
-    published: anyVerifiedPublished && !anyUnconfirmed,
-    humanRejected: false,
-  };
-  // Honest: if any UNCONFIRMED, published stays false even if others verified
-  if (anyUnconfirmed) {
-    summary.published = false;
-  }
-  return buildResult(summary, warnings);
+    },
+    warnings,
+  );
 }

@@ -167,6 +167,11 @@ export interface SubtitleFixtureData {
    * P2-2: mount empty list first; append existing rows after this delay.
    */
   languagesListRowsDelayMs?: number;
+  /**
+   * After 自动翻译: delay before captions body is marked ready.
+   * Publish may enable immediately (Studio race → 无法发布空白字幕).
+   */
+  autoTranslateContentDelayMs?: number;
 }
 
 export const DEFAULT_SUBTITLE_DATA: SubtitleFixtureData = {
@@ -423,6 +428,56 @@ function appendSubtitlesBody(
   list.setAttribute("data-luftballons-target", "subtitle.languages.list");
   list.setAttribute("aria-label", "Subtitle languages");
 
+  const captionsReady = document.createElement("div");
+  captionsReady.setAttribute("data-luftballons-captions-editor", "true");
+  captionsReady.hidden = true;
+
+  const blankError = document.createElement("div");
+  blankError.setAttribute(
+    "data-luftballons-target",
+    "subtitle.publish.blank_error",
+  );
+  blankError.setAttribute("role", "alert");
+  blankError.hidden = true;
+  blankError.textContent = "无法发布空白字幕。字幕空白。无法发布空白字幕。";
+
+  const markCaptionsReady = (ready: boolean): void => {
+    if (ready) {
+      captionsReady.setAttribute("data-luftballons-captions-ready", "true");
+      captionsReady.textContent = "Fixture cue: Hallo Welt";
+      captionsReady.hidden = false;
+      blankError.hidden = true;
+    } else {
+      captionsReady.removeAttribute("data-luftballons-captions-ready");
+      captionsReady.textContent = "";
+      captionsReady.hidden = true;
+    }
+  };
+
+  const autoTranslateBtn = document.createElement("button");
+  autoTranslateBtn.type = "button";
+  autoTranslateBtn.id = "choose-auto-translate";
+  autoTranslateBtn.setAttribute(
+    "data-luftballons-target",
+    "subtitle.auto_translate",
+  );
+  autoTranslateBtn.textContent = "自动翻译";
+  autoTranslateBtn.hidden = true;
+
+  const publishBtn = document.createElement("button");
+  publishBtn.type = "button";
+  publishBtn.setAttribute("data-luftballons-target", "subtitle.publish");
+  publishBtn.setAttribute("aria-label", "Publish");
+  publishBtn.setAttribute("role", "button");
+  publishBtn.textContent = "Publish";
+  publishBtn.disabled = true;
+  publishBtn.setAttribute("aria-disabled", "true");
+
+  const setPublishEnabled = (enabled: boolean): void => {
+    publishBtn.disabled = !enabled;
+    publishBtn.setAttribute("aria-disabled", enabled ? "false" : "true");
+  };
+
   const renderItems = (): void => {
     if (!data.omitEmptyState) {
       list.setAttribute("data-subtitle-list-state", data.existingLanguages.length === 0 && !data.injectUnparseableRow ? "EMPTY" : "READY");
@@ -434,25 +489,70 @@ function appendSubtitlesBody(
       const state = lang.state ?? "PUBLISHED";
       const item = document.createElement("div");
       item.setAttribute("data-luftballons-subtitle-row", "true");
-      // Label-only mode simulates Studio rows without code attrs (P2-2).
-      // Newly added PENDING rows still expose codes so option→list binding works.
       const omitCodeAttrs =
         data.labelOnlyExistingRows && state !== "PENDING_PUBLISH";
       if (!omitCodeAttrs) {
         item.setAttribute("data-luftballons-subtitle-lang", lang.code);
         item.setAttribute("data-language-code", lang.code);
       }
-      // assumption, calibrate on real device: published marker on the row
       item.setAttribute("data-subtitle-state", state);
       if (state === "PUBLISHED") {
         item.setAttribute("data-subtitle-published", "true");
       } else {
         item.removeAttribute("data-subtitle-published");
       }
-      item.textContent =
+      const labelEl = document.createElement("span");
+      labelEl.className = "tablecell-language";
+      labelEl.textContent =
         state === "PENDING_PUBLISH"
           ? `${lang.label} (pending)`
           : lang.label;
+      item.append(labelEl);
+      if (state === "PENDING_PUBLISH") {
+        // Layout A: #captions-add stamps on hover of the captions cell
+        // (idle DOM has no button; may stay CSS-hidden without real :hover).
+        const captionsCell = document.createElement("div");
+        captionsCell.className = "tablecell-captions";
+        const hoverCell = document.createElement("div");
+        hoverCell.className = "ytgn-video-translation-hover-cell";
+        const cellContainer = document.createElement("div");
+        cellContainer.id = "cell-container";
+        cellContainer.tabIndex = 0;
+        const status = document.createElement("div");
+        status.id = "status-info";
+        status.textContent = "–";
+        cellContainer.append(status);
+        hoverCell.append(cellContainer);
+        captionsCell.append(hoverCell);
+
+        const stampCaptionsAdd = (): void => {
+          if (cellContainer.querySelector("#captions-add")) {
+            return;
+          }
+          const captionsAdd = document.createElement("button");
+          captionsAdd.type = "button";
+          captionsAdd.id = "captions-add";
+          captionsAdd.className = "hover-button";
+          captionsAdd.setAttribute(
+            "data-luftballons-target",
+            "subtitle.captions_add",
+          );
+          captionsAdd.setAttribute("aria-label", "添加");
+          captionsAdd.setAttribute("role", "button");
+          captionsAdd.textContent = "添加";
+          // Studio often keeps hover controls visibility:hidden without :hover.
+          captionsAdd.style.visibility = "hidden";
+          captionsAdd.addEventListener("click", () => {
+            autoTranslateBtn.hidden = false;
+          });
+          cellContainer.append(captionsAdd);
+        };
+        for (const host of [captionsCell, hoverCell, cellContainer]) {
+          host.addEventListener("mouseenter", stampCaptionsAdd);
+          host.addEventListener("pointerenter", stampCaptionsAdd);
+        }
+        item.append(captionsCell);
+      }
       list.append(item);
     }
     if (data.injectUnparseableRow) {
@@ -554,23 +654,44 @@ function appendSubtitlesBody(
         lang.state = "PUBLISHED";
       }
     }
+    autoTranslateBtn.hidden = true;
+    markCaptionsReady(false);
+    blankError.hidden = true;
+    setPublishEnabled(false);
     renderItems();
     onLanguagesChanged();
   };
 
-  const publishBtn = document.createElement("button");
-  publishBtn.type = "button";
-  publishBtn.setAttribute("data-luftballons-target", "subtitle.publish");
-  publishBtn.setAttribute("aria-label", "Publish");
-  publishBtn.setAttribute("role", "button");
-  publishBtn.textContent = "Publish";
+  autoTranslateBtn.addEventListener("click", () => {
+    // Studio enables 发布 before cues finish loading.
+    setPublishEnabled(true);
+    markCaptionsReady(false);
+    blankError.hidden = true;
+    const delay = data.autoTranslateContentDelayMs ?? 0;
+    if (delay <= 0) {
+      markCaptionsReady(true);
+      return;
+    }
+    window.setTimeout(() => {
+      markCaptionsReady(true);
+    }, delay);
+  });
+
   publishBtn.addEventListener("click", () => {
     clickCounts.publish += 1;
     const mode = data.publishMode ?? "commit";
     if (mode === "noop") {
-      // Publish无效: counter bumps, pending stays pending.
       return;
     }
+    if (
+      captionsReady.getAttribute("data-luftballons-captions-ready") !== "true"
+    ) {
+      blankError.hidden = false;
+      publishBtn.setAttribute("data-publish-error", "true");
+      return;
+    }
+    blankError.hidden = true;
+    publishBtn.removeAttribute("data-publish-error");
     if (mode === "fail") {
       publishBtn.setAttribute("data-publish-error", "true");
       publishBtn.setAttribute("aria-invalid", "true");
@@ -586,13 +707,12 @@ function appendSubtitlesBody(
       }, delay);
       return;
     }
-    // commit
     commitPending();
     if (data.omitLanguagesListAfterPublish) {
       list.remove();
     }
   });
-  editor.append(publishBtn);
+  editor.append(autoTranslateBtn, publishBtn, captionsReady, blankError);
 
   main.append(editor);
 

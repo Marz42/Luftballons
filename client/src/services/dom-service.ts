@@ -28,6 +28,13 @@ export interface DomTarget {
    * absent and rely on other postconditions instead of timing out.
    */
   optional?: boolean;
+
+  /**
+   * When true, skip isDomVisible filtering. Use for hover-revealed controls
+   * that stay display/visibility-hidden until real CSS :hover (synthetic
+   * mouseenter can stamp them but not force :hover).
+   */
+  ignoreVisibility?: boolean;
 }
 
 export interface DomService {
@@ -158,7 +165,7 @@ function constrainCandidates(
   applyMatches = true,
 ): Element | null {
   const filtered = candidates.filter((el) => {
-    if (!isDomVisible(el)) {
+    if (!target.ignoreVisibility && !isDomVisible(el)) {
       return false;
     }
     if (applyMatches && target.matches && !target.matches(el)) {
@@ -173,6 +180,36 @@ function constrainCandidates(
     return null;
   }
   return filtered[0] ?? null;
+}
+
+/**
+ * querySelectorAll that also walks open shadow roots (Studio web components).
+ */
+export function querySelectorAllDeep(
+  root: ParentNode,
+  selector: string,
+): Element[] {
+  const out: Element[] = [];
+  const visit = (node: ParentNode): void => {
+    try {
+      out.push(...Array.from(node.querySelectorAll(selector)));
+    } catch {
+      /* invalid selector */
+    }
+    let elements: Element[];
+    try {
+      elements = Array.from(node.querySelectorAll("*"));
+    } catch {
+      return;
+    }
+    for (const el of elements) {
+      if (el.shadowRoot) {
+        visit(el.shadowRoot);
+      }
+    }
+  };
+  visit(root);
+  return out;
 }
 
 /**

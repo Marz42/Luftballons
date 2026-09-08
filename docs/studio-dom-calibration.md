@@ -76,48 +76,140 @@ Chinese-locale Studio channel collect (`PARTIAL`, 30 rendered videos):
   `54.8万` / `亿` are **not** parsed → `METRIC_UNPARSED` + omit field (fail-closed).
   Tracked as a parse-layer gap alongside documenting K/M/B coverage limits.
 
-### P4 subtitle surface — 2026-09-08 DOM evidence (zh-Hans-CN)
+### Studio layout families (A / B / C)
 
-Sanitized live page `/video/<VIDEO_ID>/translations`:
+A/B/C are **YouTube Studio UI layout families** (different shell + content + subtitle
+logic across accounts), not merely add-language micro-paths. Collect one sanitized
+evidence pack per family before claiming RC coverage.
+
+### Layout A — evidence pack (operator, 2026-09-08 / 09)
+
+#### Content (`/channel/<CHANNEL_ID>/content`)
 
 | Signal | Observed |
 | --- | --- |
-| URL | `/video/<VIDEO_ID>/translations` |
-| Page title | `h1` text `视频字幕` (not English “Subtitles”) |
-| Video tab current | `a#menu-item-4[href="/video/<VIDEO_ID>/translations"][aria-current=page]` text `字幕` |
-| Details tab | `a#menu-item-0[href="/video/<VIDEO_ID>/edit"]` text `详细信息` |
-| Languages table | `#ytgn-video-translations-list-table` `aria-label="翻译"` |
-| Add language | Black control `添加语言` below table (not inside table) |
-| Picker | Searchable dropdown; options are Chinese labels (拼音序), e.g. `阿拉伯语` |
-| Picker option | `tp-yt-paper-item[role=option]` text `日语` (label-only, no data-language-code) |
-| Already-added option | Greyed / non-selectable (e.g. `阿尔巴尼亚语` while already in list) |
-| Label map | `日语` → `ja`; `韩语` → `ko`; `英语（视频语言）` / `英语 (视频语言)` strips parentheticals |
-| Row order | **Not stable across accounts/videos** — e.g. `日语` first then `英语（视频语言）` then extras, or interleaved with `爱尔兰语` / `阿尔巴尼亚语`. Match by label/code only; never by index. |
-| Persistence gap | Selecting a language may show a transient table row that disappears on refresh when no caption file / auto-translate is available — not a publish success |
+| URL | `https://studio.youtube.com/channel/<CHANNEL_ID>/content` |
+| Shell | `ytcp-animatable[name="channel.content"].page.selected` → `ytcp-browse-page` |
+| Header | `h1`「内容」; chips 视频 / 短视频 / 播放列表 |
+| Feed | `ytcp-section-list-renderer[data-target-id="browse-feedFEcontent_hub"]` |
+| Video card | `yt-lockup-view-model` / `.content-id-<VIDEO_ID>`; link `/video/<VIDEO_ID>/edit` |
+| Metrics | Icon + number (views/comments) + date text; **not** classic `ytcp-video-row` table |
 
-### Add-language path variants (RC must handle both)
+**RC note:** Layout A Content is Content Hub / lockup cards. Channel collect must
+detect this family and either adapt selectors or fail-closed as unsupported.
 
-| Variant | After picking a language in 添加语言 | Evidence |
+#### Subtitles (`/video/<VIDEO_ID>/translations`)
+
+| Signal | Observed |
+| --- | --- |
+| URL | stays on `/translations` through auto-translate / publish |
+| List host | `ytgn-video-translations-list` → table |
+| Row | `ytgn-video-translation-row` → `tr#row-container`; language in `.language-text` |
+| Captions cell | `ytgn-video-translation-cell-captions` / hover-cell; idle status `–` |
+| Captions add (hover) | `ytcp-icon-button#captions-add.hover-button[aria-label="添加"]` |
+| Metadata cell | status e.g. `已发布` + date |
+| Add language | `button[aria-label="添加语言"]` |
+| Picker option | `tp-yt-paper-item[role=option][test-id="<bcp>"]` + Chinese `yt-formatted-string` |
+| Already-added | `disabled="" aria-disabled="true"` + `pointer-events: none` (e.g. `test-id="ja"` 日语) |
+| Auto-translate | `#choose-auto-translate` in `ytve-captions-editor-options-panel` |
+| Publish disabled | `button[aria-label="发布"][aria-disabled="true"][disabled]` class `…--disabled` |
+| Publish enabled | `button[aria-label="发布"][aria-disabled="false"]` after 自动翻译 |
+
+#### Layout A subtitle WRITE flow (operator-confirmed)
+
+1. **添加语言** → open picker
+2. Choose language (`test-id` preferred; skip `aria-disabled=true`) → **list gains a row**
+3. On that row’s **字幕** hover-cell, reveal/click **添加** (hover-only; idle cell shows `–`)
+   - Control: `ytcp-icon-button#captions-add.hover-button[aria-label="添加"][role="button"]`
+     inside `ytgn-video-translation-hover-cell` (appears on hover; may be absent in idle DOM)
+4. Choose **自动翻译** (`#choose-auto-translate`) — URL still `/translations`
+5. Wait until **发布** enabled, settle briefly for cues (≤~2.5s; blank-publish
+   retries once) → click **发布**
+   (live: 发布 may enable before translation finishes → 「无法发布空白字幕」)
+
+Layout A subtitle pack is **complete** for selector design (content hub + list + picker
+`test-id` + hover `#captions-add` + auto-translate + publish disabled/enabled).
+
+#### Naming note
+
+Prefer operator **layout family A/B/C**. Do not confuse with older code comments that
+labelled Content URL `/videos/upload` as “A” and `/content` as “B” — that mapping is
+**inverted** relative to this evidence pack (operator A = Content Hub `/content`;
+operator B = classic `/videos/upload` table).
+
+**Automation note (A):** hover `#captions-add` is stamped into DOM on cell
+hover (`ps-dom-if`); synthetic pointer/mouseenter + ignoreVisibility click are
+required because CSS `:hover` is not applied by dispatched events.
+
+### Layout B — DOM inventory (operator pack, flow TBD)
+
+Sanitized from `类型B.md`. Raw desktop file may contain real channel/video ids —
+do not commit it; use placeholders here.
+
+#### Content
+
+| Signal | Observed |
+| --- | --- |
+| URL | `/channel/<CHANNEL_ID>/videos/upload?filter=…&sort={columnType:date,sortOrder:DESCENDING}` |
+| List host | `ytcp-video-section-content` → `[role=table][aria-label="视频列表"].video-table-content` |
+| Row | `ytcp-video-row[role=row]` → `#row-container` |
+| Title | `a#video-title` → `/video/<VIDEO_ID>/edit` |
+| Thumbnail | `a#thumbnail-anchor` → same edit href |
+| Details control | `ytcp-icon-button#video-details[aria-label="详细信息"]` (also under `#hover-items` / `#anchor-video-details`) |
+| Other cells | visibility, date (e.g. 首播结束日期), views, comments link |
+
+Matches the **classic** collector surface (already calibrated for `ytcp-video-row`),
+unlike Layout A Content Hub lockups.
+
+#### Languages / translations surface
+
+| Signal | Observed |
+| --- | --- |
+| URL (as provided) | `/channel/<CHANNEL_ID>/translations` (**channel-scoped**, not `/video/…/translations`) |
+| Section | `ytgn-video-languages-section` summary e.g. `1 种翻译版本` |
+| List | `ytgn-video-translations-list[ui-mode="aloud_m2"]` inside `[aria-label="可滚动的翻译"]` |
+| Columns | 语言 / **音频** / 字幕 (audio column present — differs from Layout A captions+metadata) |
+| Row | `ytgn-video-translation-row[show-new-ui]` → `tr#row-container` |
+| Language open | `button.language-display-name` > span text e.g. `日语` (clickable name, not plain `.language-text` only) |
+| Add language | `button[aria-label="添加语言"]` **tonal** (Layout A was filled) |
+| Picker | same family: `tp-yt-paper-item[role=option][test-id="<bcp>"]` + Chinese label |
+| Manual captions row | `tr.manual-subtitles-row.language-dialog-row`「手动字幕」 |
+| Manual add | `#language-details-text-button-subtitles` → `button[aria-label="添加"]` (tooltip「添加字幕」) |
+| Auto-translate | `#choose-auto-translate`「自动翻译」 |
+| Publish | `button[aria-label="发布"][aria-disabled="false"]` (enabled sample in pack) |
+
+#### Layout B vs A (DOM deltas)
+
+| Area | Layout A | Layout B |
 | --- | --- | --- |
-| **A — list append** | List gains a new row immediately; no intermediate sheet | Operator account 2026-09-08 (screenshots: 阿尔巴尼亚语 / 爱尔兰语 rows) |
-| **B — sheet then translate** | Card/sheet → **手动字幕 → 添加** → **自动翻译** → language-editor **发布** | Earlier operator path on other accounts |
+| Content URL | `/channel/…/content` hub | `/channel/…/videos/upload` table |
+| Content row | `yt-lockup-view-model` | `ytcp-video-row` |
+| Translations URL | `/video/…/translations` | pack shows `/channel/…/translations` |
+| List ui-mode | (default / not aloud_m2 in A pack) | `ui-mode="aloud_m2"` + 音频 column |
+| Enter captions | hover `#captions-add` | dialog **手动字幕** → `#language-details-text-button-subtitles` |
+| Add language style | filled | tonal |
 
-Layout/order of language rows and which variant appears **differ by account**. RC adaptation = label-based matching + disabled-option skip + branch on post-select UI (row vs sheet), not a single fixed DOM sequence.
+#### Layout B WRITE flow (operator-confirmed)
 
-### Real Studio multilang publish path (variant B; 2026-09-08)
+1. **频道内容** — `/channel/…/videos/upload` classic table  
+2. Open target video via **详细信息** (`#video-details` / title → `/video/…/edit`)  
+3. Go to **字幕** (video translations surface)  
+4. Click **添加语言**  
+5. Pick one language from the picker (`test-id` / Chinese label)  
+6. **Immediately** a card/dialog opens (not a pending row on the multilang list)  
+7. On the card: **手动字幕** → **添加** (`#language-details-text-button-subtitles`)  
+8. **自动翻译** (`#choose-auto-translate`)  
+9. **发布** (`aria-label="发布"`) when enabled → Human Gate  
 
-Operator-confirmed sequence on the **语言** (`/translations`) surface:
+**Hard constraint (RC):** After picking a language in the picker, Studio opens the
+language card **directly**. There is **no** “add many languages to the list first,
+then edit each.” Automation **must** finish one language’s card path
+(手动字幕 → 自动翻译 → 发布) before starting the next **添加语言** cycle.
+Batch-select / multi-pending-row strategies are invalid on Layout B.
 
-1. On the **语言** page.
-2. Click **添加语言** → language dropdown.
-3. Pick a language → a card/sheet opens → choose **手动字幕 → 添加**.
-4. On the next card, choose **自动翻译** (requires a usable source track on 视频语言).
-5. **发布** becomes enabled (highlighted) → publish.
+**Contrast with Layout A:** A appends a list row then uses hover `#captions-add`;
+B opens `ytgn-language-dialog-row` / 手动字幕 card per selection.
 
-UI notes: 视频语言 (e.g. `英语（视频语言）`) is the auto-translate source; **自动翻译** stays disabled without source captions; publish is on the **language editor** chrome, not a list-row control. Variant A accounts still need a calibrated path from list row → editor → 发布 (待真机：点击语言行后的 DOM).
+### Layout C
 
-**Automation gap:** current `youtube.subtitle.multilang` still assumes list-page add + list-page publish + Human Gate. It does **not** yet drive variant B steps 3–5, nor variant A “open row → publish”. Live Studio has no English list-page `Publish` under the translations table → fail-closes with `PUBLISH_SURFACE_MISSING` **before** irreversible Commit. Live COMPLETED with `EXISTS` / `published=false` only proves list-level add/skip, not WRITE_COMMIT.
-
-Code updates from this evidence: `page.subtitles.title`, label maps (`日语`/`法语`/`韩语`/…), add/picker option hosts, skip disabled picker options, default targets de/ja/fr/en/es/ar/ko/zh-Hans. Full translate+publish path remains **待真机 / 待校准**.
-
-Automated validation for this change: client unit tests + Vite build.
+待 operator 证据包。

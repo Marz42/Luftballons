@@ -111,21 +111,24 @@ export function createSubtitleMultilangModule(
         return base;
       }
 
-      // Phase 4 boundary: one task = current explicitly chosen video only.
+      // Phase 4: start from video details (/edit) or already on translations.
       const detection = detectStudio({
         href: ctx.href,
         ...(options.detectDocument !== undefined
           ? { document: options.detectDocument }
           : {}),
       });
-      if (detection.page !== "VIDEO_DETAILS") {
+      if (
+        detection.page !== "VIDEO_DETAILS" &&
+        detection.page !== "SUBTITLES"
+      ) {
         return {
           available: false,
           reason: "WRONG_PAGE",
           metadata: {
             ...(base.metadata ?? {}),
             page: detection.page,
-            requiredPage: "VIDEO_DETAILS",
+            requiredPage: "VIDEO_DETAILS|SUBTITLES",
             urlPage: detection.urlPage,
             domPage: detection.domPage,
           },
