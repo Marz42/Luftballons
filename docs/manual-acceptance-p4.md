@@ -41,8 +41,8 @@ Install steps: same as `docs/manual-acceptance-p0.md`. Confirm `@match` allowlis
 - Japanese → added then published after confirm.
 - Summary lists per-language outcomes.
 
-**Pass / Fail:** ________  
-**Notes:** ________
+**Pass / Fail:** **PASS** (live 2026-09-08 — EN SKIPPED; other missing langs published)  
+**Notes:** Part of default-set run on Layout A zh-Hans Studio; see Sign-off.
 
 ---
 
@@ -59,7 +59,7 @@ Install steps: same as `docs/manual-acceptance-p0.md`. Confirm `@match` allowlis
 - Publish must **not** proceed without confirm.
 - Cancel button on the panel remains usable.
 
-**Pass / Fail:** ________
+**Pass / Fail:** ________ (not separately logged; WRITE path requires Gate confirm)
 
 ---
 
@@ -76,7 +76,7 @@ Install steps: same as `docs/manual-acceptance-p0.md`. Confirm `@match` allowlis
 - Result documents Human Gate REJECTED (warning `HUMAN_GATE_REJECTED` / languages CANCELLED).
 - Studio left usable.
 
-**Pass / Fail:** ________
+**Pass / Fail:** ________ (not run this session)
 
 ---
 
@@ -92,7 +92,7 @@ Install steps: same as `docs/manual-acceptance-p0.md`. Confirm `@match` allowlis
 - Task **FAILED** with an explanatory reason (e.g. UI mismatch).
 - **No speculative clicks** toward publish / add-language once the list is missing.
 
-**Pass / Fail:** ________
+**Pass / Fail:** ________ (not run this session; fail-closed covered by unit fixtures)
 
 ---
 
@@ -108,7 +108,8 @@ Install steps: same as `docs/manual-acceptance-p0.md`. Confirm `@match` allowlis
 - Second run mostly **EXISTS / SKIPPED**.
 - No duplicate language rows / duplicate publish for already-present languages.
 
-**Pass / Fail:** ________
+**Pass / Fail:** **PASS** (live 2026-09-08 — `de`/`ja`/`en` SKIPPED on same video after prior publish)  
+**Notes:** Same default-set run; no duplicate publish for already-published captions.
 
 ---
 
@@ -122,11 +123,14 @@ Run continuously:
 
 | Requirement | Result |
 |-------------|--------|
-| 0 erroneous publishes | ________ |
-| 0 erroneous deletes | ________ |
-| 0 operations on the wrong video | ________ |
+| 0 erroneous publishes | **PASS** on recorded Layout A run (2026-09-08) |
+| 0 erroneous deletes | **PASS** (no delete automation; run did not delete) |
+| 0 operations on the wrong video | **PASS** on recorded run (`video=VXqaJePprRg`) |
 
 **Any wrong-video write = Blocker.** Stop and report.
+
+Full **5 videos × 3 language combinations** matrix still open (one successful
+default-set video does not close §50 alone).
 
 ---
 
@@ -134,12 +138,28 @@ Run continuously:
 
 | Test | Result | Tester | Date | Machine / Profile |
 |------|--------|--------|------|-------------------|
-| P4-T1 | | | | |
-| P4-T2 | | | | |
-| P4-T3 | | | | |
-| P4-T4 | | | | |
-| P4-T5 | | | | |
-| §50 5×3 matrix | | | | |
+| P4-T1 | PASS | operator | 2026-09-08 | Layout A / zh-Hans Studio |
+| P4-T2 | — | | | (Gate exercised for SUCCESS langs; not separately logged) |
+| P4-T3 | — | | | not run |
+| P4-T4 | — | | | not run (unit fixtures cover fail-closed) |
+| P4-T5 | PASS | operator | 2026-09-08 | same video; published langs SKIPPED |
+| §50 5×3 matrix | PARTIAL | operator | 2026-09-08 | 1 video × default set; matrix incomplete |
+
+### Live default-set run — 2026-09-08
+
+```text
+Module: youtube.subtitle.multilang
+State: COMPLETED
+video=VXqaJePprRg; published=true
+Deutsch(de) SKIPPED; 日本語(ja) SKIPPED; English(en) SKIPPED
+Français(fr) SUCCESS; Español(es) SUCCESS; العربية(ar) SUCCESS
+한국어(ko) SUCCESS; 中文（简体）(zh-Hans) SUCCESS
+```
+
+Layout A WRITE path (hover add → auto-translate → publish-stable READY → captions
+publish verify including hover edit/delete) accepted for this sample. Remaining:
+P4-T3/T4 explicit checks, Layout B/C, full §50 matrix. Calibration:
+`docs/studio-dom-calibration.md`.
 
 ---
 
@@ -240,7 +260,7 @@ Blockers / wrong-video incidents:
 None / …
 ```
 
-Until this report lands, keep all `assumption, calibrate on real device` comments. Do not claim live verification.
+Until this report lands, keep all `assumption, calibrate on real device` comments. Do not claim live verification for **other** layout families or uncalibrated shells. Layout A zh-Hans WRITE path: see Sign-off (2026-09-08).
 
 
 ## 2026-09-08 review follow-up

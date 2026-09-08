@@ -438,12 +438,12 @@ describe("youtube.subtitle.multilang (FT-011 / P4-T1…T5)", () => {
     const taskId = await runner.start("youtube.subtitle.multilang");
     await vi.waitFor(() => {
       expect(runner.getState(taskId)).toBe("FAILED");
-    }, { timeout: 5_000 });
+    }, { timeout: 15_000 });
     expect(fixture.clickCounts.publish).toBe(1);
     const result = runner.getSnapshot(taskId).result;
-    expect(result?.summary).toMatch(/PENDING_PUBLISH|FAILED/i);
+    expect(result?.summary).toMatch(/PENDING_PUBLISH|FAILED|PUBLISHED state not observed/i);
     expect(result?.summary).not.toMatch(/published=true/);
-  });
+  }, 20_000);
 
   it("P1-3b: publish fail surface → FAILED, published=false", async () => {
     fixture = mountStudioFixture({
@@ -552,10 +552,10 @@ describe("youtube.subtitle.multilang (FT-011 / P4-T1…T5)", () => {
     const taskId = await runner.start("youtube.subtitle.multilang");
     await vi.waitFor(() => {
       expect(runner.getState(taskId)).toBe("FAILED");
-    }, { timeout: 8_000 });
+    }, { timeout: 12_000 });
     const result = runner.getSnapshot(taskId).result;
     expect(result?.summary).not.toMatch(/published=true/);
-  });
+  }, 15_000);
 
   it("P2-1a: add menu async delay → wait then succeed", async () => {
     fixture = mountStudioFixture({
@@ -880,4 +880,242 @@ describe("youtube.subtitle.multilang (FT-011 / P4-T1…T5)", () => {
     await vi.waitFor(() => expect(runner.getState(id)).toBe("FAILED"), { timeout: 10_000 });
     expect(fixture.clickCounts.publish).toBe(0);
   }, 12_000);
+
+  it("P1-live: captions cell 已发布 without data attrs → SKIPPED/EXISTS", async () => {
+    fixture = mountStudioFixture({
+      page: "VIDEO_DETAILS",
+      subtitles: {
+        existingLanguages: [
+          {
+            code: "ja",
+            label: "日语",
+            state: "PUBLISHED",
+            omitDataStateAttrs: true,
+            captionsStatus: "published",
+            metadataPublished: true,
+          },
+        ],
+        pickerLanguages: [{ code: "ja", label: "日语" }],
+      },
+    });
+    const runner = makeRunner(
+      createFixtureSubtitleModule(fixture, {
+        initialLanguages: [{ code: "ja", label: "日本語" }],
+      }),
+      createAutoApproveGate(),
+    );
+    const id = await runner.start("youtube.subtitle.multilang");
+    await vi.waitFor(() => expect(runner.getState(id)).toBe("COMPLETED"));
+    const summary = runner.getSnapshot(id).result?.summary ?? "";
+    expect(summary).toMatch(/EXISTS|SKIPPED/);
+    expect(fixture.clickCounts.publish).toBe(0);
+  });
+
+  it("P1-live: metadata 已发布 + captions – must not skip", async () => {
+    fixture = mountStudioFixture({
+      page: "VIDEO_DETAILS",
+      subtitles: {
+        existingLanguages: [
+          {
+            code: "fr",
+            label: "法语",
+            state: "PENDING_PUBLISH",
+            omitDataStateAttrs: true,
+            captionsStatus: "dash",
+            metadataPublished: true,
+          },
+        ],
+        pickerLanguages: [{ code: "fr", label: "法语" }],
+      },
+    });
+    const runner = makeRunner(
+      createFixtureSubtitleModule(fixture, {
+        initialLanguages: [{ code: "fr", label: "Français" }],
+      }),
+      createAutoApproveGate(),
+    );
+    const id = await runner.start("youtube.subtitle.multilang");
+    await vi.waitFor(() => expect(runner.getState(id)).toBe("COMPLETED"), {
+      timeout: 10_000,
+    });
+    expect(fixture.clickCounts.publish).toBe(1);
+    expect(runner.getSnapshot(id).result?.summary).toMatch(/Français\(fr\) SUCCESS/);
+  }, 12_000);
+
+  it("P1-live: translate delay beyond READY budget → zero publish clicks", async () => {
+    fixture = mountStudioFixture({
+      page: "VIDEO_DETAILS",
+      subtitles: {
+        existingLanguages: [],
+        pickerLanguages: [{ code: "de", label: "Deutsch" }],
+        autoTranslateContentDelayMs: 13_000,
+      },
+    });
+    const runner = makeRunner(
+      createFixtureSubtitleModule(fixture, {
+        initialLanguages: [{ code: "de", label: "Deutsch" }],
+      }),
+      createAutoApproveGate(),
+    );
+    const id = await runner.start("youtube.subtitle.multilang");
+    await vi.waitFor(() => expect(runner.getState(id)).toBe("FAILED"), {
+      timeout: 20_000,
+    });
+    expect(fixture.clickCounts.publish).toBe(0);
+    expect(runner.getSnapshot(id).result?.warnings?.some((w) => w.code === "WAIT_TIMEOUT")).toBe(
+      true,
+    );
+  }, 25_000);
+
+  it("P1-live: hidden leftover cues must not mark current language READY", async () => {
+    fixture = mountStudioFixture({
+      page: "VIDEO_DETAILS",
+      subtitles: {
+        existingLanguages: [],
+        pickerLanguages: [{ code: "de", label: "Deutsch" }],
+        leftoverReadyLanguageCode: "en",
+        autoTranslateContentDelayMs: 200,
+      },
+    });
+    const runner = makeRunner(
+      createFixtureSubtitleModule(fixture, {
+        initialLanguages: [{ code: "de", label: "Deutsch" }],
+      }),
+      createAutoApproveGate(),
+    );
+    const id = await runner.start("youtube.subtitle.multilang");
+    await vi.waitFor(() => expect(runner.getState(id)).toBe("COMPLETED"), {
+      timeout: 10_000,
+    });
+    expect(fixture.clickCounts.publish).toBe(1);
+  }, 12_000);
+
+  it("P1-live: re-run resumes captions-missing then continues to next language", async () => {
+    fixture = mountStudioFixture({
+      page: "VIDEO_DETAILS",
+      subtitles: {
+        existingLanguages: [
+          {
+            code: "ja",
+            label: "日语",
+            state: "PENDING_PUBLISH",
+            omitDataStateAttrs: true,
+            captionsStatus: "dash",
+            metadataPublished: false,
+          },
+        ],
+        pickerLanguages: [
+          { code: "ja", label: "日语" },
+          { code: "ko", label: "韩语" },
+        ],
+      },
+    });
+    const mod = createFixtureSubtitleModule(fixture, {
+      initialLanguages: [
+        { code: "ja", label: "日本語" },
+        { code: "ko", label: "한국어" },
+      ],
+    });
+    const runner = makeRunner(mod, createAutoApproveGate());
+    const id = await runner.start("youtube.subtitle.multilang");
+    await vi.waitFor(() => expect(runner.getState(id)).toBe("COMPLETED"), {
+      timeout: 15_000,
+    });
+    const summary = runner.getSnapshot(id).result?.summary ?? "";
+    expect(summary).toMatch(/日本語\(ja\) SUCCESS/);
+    expect(summary).toMatch(/한국어\(ko\) SUCCESS/);
+    expect(fixture.clickCounts.publish).toBe(2);
+  }, 20_000);
+
+  it("P1-live: ytgn-video-translations-list host parses captions without failing whole list", async () => {
+    // Live list host is often ytgn-video-translations-list (not HTMLTableElement).
+    const list = document.createElement("ytgn-video-translations-list");
+    list.setAttribute("data-luftballons-target", "subtitle.languages.list");
+    list.setAttribute("aria-label", "翻译");
+    const rowHost = document.createElement("ytgn-video-translation-row");
+    const tr = document.createElement("tr");
+    tr.id = "row-container";
+    const lang = document.createElement("span");
+    lang.className = "language-text";
+    lang.textContent = "日语";
+    const captions = document.createElement("ytgn-video-translation-cell-captions");
+    const status = document.createElement("div");
+    status.id = "status-info";
+    status.textContent = "已发布";
+    captions.append(status);
+    const meta = document.createElement("ytgn-video-translation-cell-metadata");
+    const metaStatus = document.createElement("div");
+    metaStatus.id = "status-info";
+    metaStatus.textContent = "已发布";
+    meta.append(metaStatus);
+    tr.append(lang, captions, meta);
+    rowHost.append(tr);
+    list.append(rowHost);
+    const editor = document.createElement("main");
+    editor.setAttribute("data-luftballons-target", "subtitle.editor");
+    editor.append(list);
+    const page = document.createElement("main");
+    page.setAttribute("data-page", "SUBTITLES");
+    page.append(editor);
+    document.body.replaceChildren(page);
+
+    const { createDomService } = await import("../../src/services/dom-service.js");
+    const { parseLanguageList } = await import(
+      "../../src/sites/youtube-studio/modules/subtitle-multilang/workflow.js"
+    );
+    const parsed = await parseLanguageList(createDomService());
+    expect(parsed.kind).toBe("READABLE");
+    if (parsed.kind !== "READABLE") {
+      return;
+    }
+    expect(parsed.rows).toEqual([
+      expect.objectContaining({
+        code: "ja",
+        state: "CAPTIONS_PUBLISHED",
+      }),
+    ]);
+  });
+
+  it("P1-live: captions hover edit/delete counts as published (status text hidden)", async () => {
+    const list = document.createElement("ytgn-video-translations-list");
+    list.setAttribute("data-luftballons-target", "subtitle.languages.list");
+    list.setAttribute("aria-label", "翻译");
+    const rowHost = document.createElement("ytgn-video-translation-row");
+    const tr = document.createElement("tr");
+    tr.id = "row-container";
+    const lang = document.createElement("span");
+    lang.className = "language-text";
+    lang.textContent = "日语";
+    const captions = document.createElement("ytgn-video-translation-cell-captions");
+    captions.className = "tablecell-captions";
+    // Hover state: status text gone; edit/delete actions visible (live screenshot).
+    const edit = document.createElement("button");
+    edit.setAttribute("aria-label", "编辑");
+    const del = document.createElement("button");
+    del.setAttribute("aria-label", "删除");
+    captions.append(edit, del);
+    const meta = document.createElement("ytgn-video-translation-cell-metadata");
+    const metaStatus = document.createElement("div");
+    metaStatus.id = "status-info";
+    metaStatus.textContent = "已发布";
+    meta.append(metaStatus);
+    tr.append(lang, captions, meta);
+    rowHost.append(tr);
+    list.append(rowHost);
+    document.body.replaceChildren(list);
+
+    const { createDomService } = await import("../../src/services/dom-service.js");
+    const { parseLanguageList } = await import(
+      "../../src/sites/youtube-studio/modules/subtitle-multilang/workflow.js"
+    );
+    const parsed = await parseLanguageList(createDomService());
+    expect(parsed.kind).toBe("READABLE");
+    if (parsed.kind !== "READABLE") {
+      return;
+    }
+    expect(parsed.rows[0]).toMatchObject({
+      code: "ja",
+      state: "CAPTIONS_PUBLISHED",
+    });
+  });
 });

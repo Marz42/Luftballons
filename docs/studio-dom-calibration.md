@@ -123,12 +123,48 @@ detect this family and either adapt selectors or fail-closed as unsupported.
    - Control: `ytcp-icon-button#captions-add.hover-button[aria-label="添加"][role="button"]`
      inside `ytgn-video-translation-hover-cell` (appears on hover; may be absent in idle DOM)
 4. Choose **自动翻译** (`#choose-auto-translate`) — URL still `/translations`
-5. Wait until **发布** enabled, settle briefly for cues (≤~2.5s; blank-publish
-   retries once) → click **发布**
+5. Wait until **发布** enabled; live Layout A has no cue DOM → treat **发布**
+   stable (~2s, no blank toast) as READY, then click **发布** → verify captions
+   published (`已发布` text **or** hover edit/delete chrome). Fixture tests still
+   require explicit captions-ready markers.
    (live: 发布 may enable before translation finishes → 「无法发布空白字幕」)
 
 Layout A subtitle pack is **complete** for selector design (content hub + list + picker
 `test-id` + hover `#captions-add` + auto-translate + publish disabled/enabled).
+
+#### Live WRITE acceptance — 2026-09-08 (Layout A, zh-Hans Studio)
+
+Operator ran `youtube.subtitle.multilang` end-to-end on `/edit`|/translations
+(defaults `de,ja,fr,en,es,ar,ko,zh-Hans`). Result: **COMPLETED**, `published=true`.
+
+| Language | Outcome |
+| --- | --- |
+| Deutsch (`de`), 日本語 (`ja`), English (`en`) | **SKIPPED** (captions already published) |
+| Français (`fr`), Español (`es`), العربية (`ar`), 한국어 (`ko`), 中文（简体） (`zh-Hans`) | **SUCCESS** |
+
+Calibration fixes validated live: captions-vs-metadata parse, hover `#captions-add`,
+publish-stable READY, and post-publish verify when hover hides「已发布」behind
+edit/delete. See `docs/manual-acceptance-p4.md` sign-off. Layout B/C and full §50
+5×3 matrix remain open.
+
+#### Captions vs metadata state (WRITE diff / publish verify)
+
+| Captions cell `#status-info` | Metadata cell | Diff action |
+| --- | --- | --- |
+| `–` / empty | anything (incl. `已发布`) | **Resume** captions entry — never skip |
+| `已发布` (+ optional date) | anything | **Skip** (captions published) |
+| Hover shows **编辑/删除** (status text hidden) | anything | **Skip** — published track chrome (not `#captions-add`) |
+| other non-dash text | anything | **Resume draft** (no blind re-translate if cues READY) |
+| unreadable / missing cell | — | treat as **CAPTIONS_MISSING** (resume), not whole-list fail |
+
+Publish success requires the **captions** cell to indicate published (「已发布」
+and/or edit/delete hover chrome — **not** metadata-only「已发布」), after editor
+chrome settles. Auto-translate must reach **READY** before 发布; timeout refuses
+publish rather than clicking blank tracks.
+
+**Automation note (A):** hover `#captions-add` is stamped into DOM on cell
+hover (`ps-dom-if`); scoped hover + unique list→row→captions→add; temporary
+hover styles restored; Human Gate hover assist if stamp fails.
 
 #### Naming note
 
@@ -136,10 +172,6 @@ Prefer operator **layout family A/B/C**. Do not confuse with older code comments
 labelled Content URL `/videos/upload` as “A” and `/content` as “B” — that mapping is
 **inverted** relative to this evidence pack (operator A = Content Hub `/content`;
 operator B = classic `/videos/upload` table).
-
-**Automation note (A):** hover `#captions-add` is stamped into DOM on cell
-hover (`ps-dom-if`); synthetic pointer/mouseenter + ignoreVisibility click are
-required because CSS `:hover` is not applied by dispatched events.
 
 ### Layout B — DOM inventory (operator pack, flow TBD)
 

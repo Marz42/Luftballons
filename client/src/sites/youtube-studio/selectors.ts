@@ -452,11 +452,14 @@ export const SUBTITLE_TARGETS = {
   /**
    * Captions body ready after 自动翻译 (publish can enable before cues load —
    * live 2026-09-08: 无法发布空白字幕 when clicking too early).
+   * Visibility required — do not match hidden leftover editors.
    */
   "subtitle.captions.ready": {
     id: "subtitle.captions.ready",
-    ignoreVisibility: true,
     matches: (el) => {
+      if (!isActiveElement(el)) {
+        return false;
+      }
       if (el.getAttribute("data-luftballons-captions-ready") === "true") {
         return true;
       }
@@ -464,7 +467,6 @@ export const SUBTITLE_TARGETS = {
       if (!text || text.length < 1) {
         return false;
       }
-      // Reject empty-state / blank warnings as "ready".
       if (/字幕空白|无法发布空白|blank caption/i.test(text) && text.length < 80) {
         return false;
       }

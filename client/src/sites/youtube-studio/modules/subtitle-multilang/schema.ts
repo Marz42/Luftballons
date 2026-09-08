@@ -47,6 +47,24 @@ export function defaultTargetLanguages(): SubtitleLanguage[] {
   ).map((l) => ({ ...l }));
 }
 
+/**
+ * True when captions for this language are already published (skip).
+ */
+export function isCaptionsPublishedState(state: SubtitleRowState): boolean {
+  return state === "CAPTIONS_PUBLISHED" || state === "PUBLISHED";
+}
+
+/**
+ * Row exists but captions still need entry / translate / publish resume.
+ */
+export function needsCaptionsResume(state: SubtitleRowState): boolean {
+  return (
+    state === "CAPTIONS_MISSING" ||
+    state === "CAPTIONS_DRAFT" ||
+    state === "PENDING_PUBLISH"
+  );
+}
+
 export type LanguageOutcomeStatus =
   | "SUCCESS"
   | "EXISTS"
@@ -56,13 +74,30 @@ export type LanguageOutcomeStatus =
   | "UNCONFIRMED";
 
 /**
- * Observed row state in the subtitle languages list (assumption fixture).
- * EXISTS is treated like PUBLISHED for skip logic (already on video).
+ * Observed captions state for a language row (Layout A: captions cell only).
+ * Metadata cell「已发布」must never be treated as captions published.
+ *
+ * Fixture shortcuts:
+ * - data-subtitle-state=PUBLISHED → CAPTIONS_PUBLISHED
+ * - data-subtitle-state=PENDING_PUBLISH → CAPTIONS_MISSING (needs captions entry)
  */
 export type SubtitleRowState =
-  | "EXISTS"
+  | "CAPTIONS_MISSING"
+  | "CAPTIONS_DRAFT"
+  | "CAPTIONS_PUBLISHED"
+  | "UNPARSEABLE"
+  /** @deprecated fixture alias — mapped to CAPTIONS_MISSING */
   | "PENDING_PUBLISH"
-  | "PUBLISHED";
+  /** @deprecated fixture alias — mapped to CAPTIONS_PUBLISHED */
+  | "PUBLISHED"
+  /** @deprecated never skip on live unmarked rows */
+  | "EXISTS";
+
+export type CaptionsTranslatePhase =
+  | "TRANSLATING"
+  | "READY"
+  | "ERROR"
+  | "UNKNOWN";
 
 export interface SubtitleLanguageRow {
   code: string;

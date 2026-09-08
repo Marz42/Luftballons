@@ -112,6 +112,15 @@ export interface SubtitleFixtureData {
     label: string;
     /** assumption: PUBLISHED | PENDING_PUBLISH (default PUBLISHED) */
     state?: "PUBLISHED" | "PENDING_PUBLISH";
+    /**
+     * Layout A captions cell #status-info (overrides state when omitDataStateAttrs).
+     * dash = –; published = 已发布; draft = other text.
+     */
+    captionsStatus?: "dash" | "published" | "draft";
+    /** Metadata cell may show 已发布 independently of captions. */
+    metadataPublished?: boolean;
+    /** Omit data-subtitle-state / data-subtitle-published (live-shaped). */
+    omitDataStateAttrs?: boolean;
   }>;
   /**
    * Available options in the Add-language picker.
@@ -172,6 +181,11 @@ export interface SubtitleFixtureData {
    * Publish may enable immediately (Studio race → 无法发布空白字幕).
    */
   autoTranslateContentDelayMs?: number;
+  /**
+   * Inject a hidden leftover ready marker for another language (must not
+   * make the active language READY).
+   */
+  leftoverReadyLanguageCode?: string;
 }
 
 export const DEFAULT_SUBTITLE_DATA: SubtitleFixtureData = {
@@ -432,6 +446,8 @@ function appendSubtitlesBody(
   captionsReady.setAttribute("data-luftballons-captions-editor", "true");
   captionsReady.hidden = true;
 
+  let activeCaptionsLang: string | null = null;
+
   const blankError = document.createElement("div");
   blankError.setAttribute(
     "data-luftballons-target",
@@ -441,17 +457,110 @@ function appendSubtitlesBody(
   blankError.hidden = true;
   blankError.textContent = "无法发布空白字幕。字幕空白。无法发布空白字幕。";
 
-  const markCaptionsReady = (ready: boolean): void => {
+  const markCaptionsReady = (ready: boolean, langCode?: string): void => {
+    const code = langCode ?? activeCaptionsLang ?? "";
     if (ready) {
       captionsReady.setAttribute("data-luftballons-captions-ready", "true");
-      captionsReady.textContent = "Fixture cue: Hallo Welt";
+      if (code) {
+        captionsReady.setAttribute("data-language-code", code);
+        captionsReady.setAttribute("data-luftballons-subtitle-lang", code);
+      }
+      captionsReady.textContent = `Fixture cue (${code || "?"}): Hallo Welt`;
       captionsReady.hidden = false;
       blankError.hidden = true;
     } else {
       captionsReady.removeAttribute("data-luftballons-captions-ready");
+      captionsReady.removeAttribute("data-language-code");
+      captionsReady.removeAttribute("data-luftballons-subtitle-lang");
       captionsReady.textContent = "";
       captionsReady.hidden = true;
     }
+  };
+
+  if (data.leftoverReadyLanguageCode) {
+    const leftover = document.createElement("div");
+    leftover.setAttribute("data-luftballons-captions-editor", "true");
+    leftover.setAttribute("data-luftballons-captions-ready", "true");
+    leftover.setAttribute("data-language-code", data.leftoverReadyLanguageCode);
+    leftover.setAttribute(
+      "data-luftballons-subtitle-lang",
+      data.leftoverReadyLanguageCode,
+    );
+    leftover.hidden = true;
+    leftover.style.display = "none";
+    leftover.textContent = "Leftover cue from prior language";
+    editor.append(leftover);
+  }
+
+  const appendCaptionsCell = (
+    item: HTMLElement,
+    langCode: string,
+    captionsStatus: "dash" | "published" | "draft",
+  ): void => {
+    const captionsCell = document.createElement("div");
+    captionsCell.className = "tablecell-captions";
+    captionsCell.setAttribute("data-luftballons-captions-cell", "true");
+    const hoverCell = document.createElement("div");
+    hoverCell.className = "ytgn-video-translation-hover-cell";
+    const cellContainer = document.createElement("div");
+    cellContainer.id = "cell-container";
+    cellContainer.tabIndex = 0;
+    const status = document.createElement("div");
+    status.id = "status-info";
+    status.setAttribute("data-luftballons-captions-status", "true");
+    status.textContent =
+      captionsStatus === "published"
+        ? "已发布"
+        : captionsStatus === "draft"
+          ? "草稿"
+          : "–";
+    cellContainer.append(status);
+    hoverCell.append(cellContainer);
+    captionsCell.append(hoverCell);
+
+    if (captionsStatus === "dash" || captionsStatus === "draft") {
+      const stampCaptionsAdd = (): void => {
+        if (cellContainer.querySelector("#captions-add")) {
+          return;
+        }
+        const captionsAdd = document.createElement("button");
+        captionsAdd.type = "button";
+        captionsAdd.id = "captions-add";
+        captionsAdd.className = "hover-button";
+        captionsAdd.setAttribute(
+          "data-luftballons-target",
+          "subtitle.captions_add",
+        );
+        captionsAdd.setAttribute("aria-label", "添加");
+        captionsAdd.setAttribute("role", "button");
+        captionsAdd.textContent = "添加";
+        captionsAdd.style.visibility = "hidden";
+        captionsAdd.addEventListener("click", () => {
+          activeCaptionsLang = langCode;
+          autoTranslateBtn.hidden = false;
+        });
+        cellContainer.append(captionsAdd);
+      };
+      for (const host of [captionsCell, hoverCell, cellContainer]) {
+        host.addEventListener("mouseenter", stampCaptionsAdd);
+        host.addEventListener("pointerenter", stampCaptionsAdd);
+      }
+    }
+    item.append(captionsCell);
+  };
+
+  const appendMetadataCell = (
+    item: HTMLElement,
+    metadataPublished: boolean,
+  ): void => {
+    const meta = document.createElement("div");
+    meta.className = "tablecell-metadata";
+    meta.setAttribute("data-luftballons-metadata-cell", "true");
+    const status = document.createElement("div");
+    status.id = "status-info";
+    status.textContent = metadataPublished ? "已发布" : "–";
+    meta.append(status);
+    item.append(meta);
   };
 
   const autoTranslateBtn = document.createElement("button");
@@ -495,64 +604,33 @@ function appendSubtitlesBody(
         item.setAttribute("data-luftballons-subtitle-lang", lang.code);
         item.setAttribute("data-language-code", lang.code);
       }
-      item.setAttribute("data-subtitle-state", state);
-      if (state === "PUBLISHED") {
-        item.setAttribute("data-subtitle-published", "true");
+      if (!lang.omitDataStateAttrs) {
+        item.setAttribute("data-subtitle-state", state);
+        if (state === "PUBLISHED") {
+          item.setAttribute("data-subtitle-published", "true");
+        } else {
+          item.removeAttribute("data-subtitle-published");
+        }
       } else {
+        item.removeAttribute("data-subtitle-state");
         item.removeAttribute("data-subtitle-published");
       }
       const labelEl = document.createElement("span");
-      labelEl.className = "tablecell-language";
+      labelEl.className = "tablecell-language language-text";
       labelEl.textContent =
         state === "PENDING_PUBLISH"
           ? `${lang.label} (pending)`
           : lang.label;
       item.append(labelEl);
-      if (state === "PENDING_PUBLISH") {
-        // Layout A: #captions-add stamps on hover of the captions cell
-        // (idle DOM has no button; may stay CSS-hidden without real :hover).
-        const captionsCell = document.createElement("div");
-        captionsCell.className = "tablecell-captions";
-        const hoverCell = document.createElement("div");
-        hoverCell.className = "ytgn-video-translation-hover-cell";
-        const cellContainer = document.createElement("div");
-        cellContainer.id = "cell-container";
-        cellContainer.tabIndex = 0;
-        const status = document.createElement("div");
-        status.id = "status-info";
-        status.textContent = "–";
-        cellContainer.append(status);
-        hoverCell.append(cellContainer);
-        captionsCell.append(hoverCell);
 
-        const stampCaptionsAdd = (): void => {
-          if (cellContainer.querySelector("#captions-add")) {
-            return;
-          }
-          const captionsAdd = document.createElement("button");
-          captionsAdd.type = "button";
-          captionsAdd.id = "captions-add";
-          captionsAdd.className = "hover-button";
-          captionsAdd.setAttribute(
-            "data-luftballons-target",
-            "subtitle.captions_add",
-          );
-          captionsAdd.setAttribute("aria-label", "添加");
-          captionsAdd.setAttribute("role", "button");
-          captionsAdd.textContent = "添加";
-          // Studio often keeps hover controls visibility:hidden without :hover.
-          captionsAdd.style.visibility = "hidden";
-          captionsAdd.addEventListener("click", () => {
-            autoTranslateBtn.hidden = false;
-          });
-          cellContainer.append(captionsAdd);
-        };
-        for (const host of [captionsCell, hoverCell, cellContainer]) {
-          host.addEventListener("mouseenter", stampCaptionsAdd);
-          host.addEventListener("pointerenter", stampCaptionsAdd);
-        }
-        item.append(captionsCell);
-      }
+      const captionsStatus =
+        lang.captionsStatus ??
+        (state === "PUBLISHED" ? "published" : "dash");
+      appendCaptionsCell(item, lang.code, captionsStatus);
+      appendMetadataCell(
+        item,
+        lang.metadataPublished ?? state === "PUBLISHED",
+      );
       list.append(item);
     }
     if (data.injectUnparseableRow) {
@@ -652,11 +730,13 @@ function appendSubtitlesBody(
     for (const lang of data.existingLanguages) {
       if (lang.state === "PENDING_PUBLISH") {
         lang.state = "PUBLISHED";
+        lang.captionsStatus = "published";
       }
     }
     autoTranslateBtn.hidden = true;
     markCaptionsReady(false);
     blankError.hidden = true;
+    activeCaptionsLang = null;
     setPublishEnabled(false);
     renderItems();
     onLanguagesChanged();
@@ -665,15 +745,16 @@ function appendSubtitlesBody(
   autoTranslateBtn.addEventListener("click", () => {
     // Studio enables 发布 before cues finish loading.
     setPublishEnabled(true);
-    markCaptionsReady(false);
+    markCaptionsReady(false, activeCaptionsLang ?? undefined);
     blankError.hidden = true;
     const delay = data.autoTranslateContentDelayMs ?? 0;
+    const langAtClick = activeCaptionsLang;
     if (delay <= 0) {
-      markCaptionsReady(true);
+      markCaptionsReady(true, langAtClick ?? undefined);
       return;
     }
     window.setTimeout(() => {
-      markCaptionsReady(true);
+      markCaptionsReady(true, langAtClick ?? undefined);
     }, delay);
   });
 

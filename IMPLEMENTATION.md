@@ -2611,3 +2611,7 @@ FT-004
 ## P2/P3 calibration update — 2026-09-07
 
 FT-007–010: collector v2 now uses the real zh-Hans-CN Dashboard, Analytics and Content DOM. See [calibration evidence](docs/studio-dom-calibration.md) for selectors, period provenance, current-page scope, and remaining live acceptance. Local tests do not replace Tampermonkey end-to-end evidence. Schema v1 remains unchanged.
+
+## P4 subtitle live acceptance — 2026-09-08
+
+FT-011: Layout A (zh-Hans Studio) `youtube.subtitle.multilang` default-set run **COMPLETED** with `published=true` (SKIPPED for already-published `de`/`ja`/`en`; SUCCESS for `fr`/`es`/`ar`/`ko`/`zh-Hans`). Captions-scoped parse, hover `#captions-add`, publish-stable READY, and hover edit/delete publish verify are live-validated. See [manual-acceptance-p4](docs/manual-acceptance-p4.md) and [calibration](docs/studio-dom-calibration.md). Open: P4-T3/T4 explicit checks, Layout B/C, full §50 5×3 matrix.
