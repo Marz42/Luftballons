@@ -4,7 +4,7 @@ Authoritative criteria: `IMPLEMENTATION.md` §35（Admin internal-only）、§54
 
 Automated coverage（仓库现状）：server ≈ 23 pytest；client ≈ 153 tests（含 config 白名单、killSwitch、OFF zero-fetch、幂等 ingest）。**真机 + 多 Installation + 局域网 Server 不在 CI 内** — 本手册供与 Phase 4 一并人工验收。
 
-前提：`client/dist/Luftballons.user.js` 已安装（`pnpm build`）；Tampermonkey `@match` 仍仅 Studio / youtube.com；`@grant none`；无 `@match *://*/*`、无 `@connect *`。P4 字幕相关步骤见 `docs/manual-acceptance-p4.md`。
+前提：`client/dist/Luftballons.user.js` 已安装（`pnpm build`）；Tampermonkey `@match` 仍仅 Studio / youtube.com；`@grant` 仅 `GM_getValue`/`GM_setValue`/`GM_deleteValue`；无 `@match *://*/*`、无 `@connect *`。P4 字幕相关步骤见 `docs/manual-acceptance-p4.md`。
 
 ---
 
@@ -421,7 +421,7 @@ Admin **Modules** 页仅暴露 `enabled` / `killSwitch` 复选框（合法写路
 
 当前 Server：`allow_origins=["*"]`，`allow_credentials=False`，仅 `Authorization` + `Content-Type`。
 
-原因：userscript `@grant none`，请求走页面 `fetch`，源为 `https://studio.youtube.com`，浏览器强制 CORS。内网 MVP 用 `*` + Bearer token + 禁止公网暴露兜底。Phase 6 可收紧为明确内网 Origin 列表 / 反代同源。
+原因：userscript 请求仍走页面 `fetch`，源为 `https://studio.youtube.com`，浏览器强制 CORS。Server 默认 allowlist 为 Studio / youtube.com origins（可用 `LUFTBALLONS_ALLOW_ORIGINS` 扩展），配合 Bearer token + 禁止公网暴露。
 
 ### 常见问题
 

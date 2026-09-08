@@ -6,11 +6,13 @@ from sqlalchemy import select
 
 from app.models.installation import Installation
 from app.services.auth import hash_token
+from helpers import register_headers
 
 
 def test_register_returns_id_and_token_once(client, session_factory):
     response = client.post(
         "/api/v1/installations/register",
+        headers=register_headers(),
         json={"display_name": "PC-A", "runtime_version": "0.1.0"},
     )
     assert response.status_code == 201
@@ -35,8 +37,16 @@ def test_register_returns_id_and_token_once(client, session_factory):
 
 
 def test_register_each_call_is_independent(client, session_factory):
-    a = client.post("/api/v1/installations/register", json={}).json()
-    b = client.post("/api/v1/installations/register", json={}).json()
+    a = client.post(
+        "/api/v1/installations/register",
+        headers=register_headers(),
+        json={},
+    ).json()
+    b = client.post(
+        "/api/v1/installations/register",
+        headers=register_headers(),
+        json={},
+    ).json()
     assert a["installation_id"] != b["installation_id"]
     assert a["token"] != b["token"]
 

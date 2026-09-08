@@ -2,9 +2,21 @@
 
 Checklist for `IMPLEMENTATION.md` §63–§65. Updated in Phase 6 (FT-018).
 
-Legend: **PASS** = automated evidence green; **待真机** = needs live Studio / multi-PC; **NA** = not applicable for this milestone.
+Legend: **PASS** = automated evidence green (**CI** `.github/workflows/ci.yml`: typecheck, client tests, server tests, build, `security-audit.sh`); **待真机** = needs live Studio / multi-PC; **NA** = not applicable for this milestone.
 
 ---
+
+## Automated gate (CI)
+
+| Check | Command / job | Required |
+|-------|---------------|----------|
+| Typecheck | `pnpm typecheck` | yes |
+| Client tests | `pnpm test` | yes |
+| Server tests | `cd server && pytest -q` | yes |
+| Build | `pnpm build` | yes |
+| Security audit | `./scripts/security-audit.sh` (after build) | yes |
+
+PR / `main` commits must keep the CI workflow green before claiming automated PASS.
 
 ## Gate A — Functional (§63)
 
@@ -61,6 +73,7 @@ Legend: **PASS** = automated evidence green; **待真机** = needs live Studio /
 | Blocker | Guarantee | Evidence |
 |---------|-----------|----------|
 | 操作错视频 | Binding recheck before writes | `recheckVideoBinding` in `workflow.ts`; subtitle binding failure tests |
+| 频道串写 | Channel binding recheck after nav | `recheckChannelBinding` in `collector.ts` |
 | 误发布 | Human Gate + PUBLISHED postcondition | `human-gate.ts`; workflow publish confirmation / `PUBLISH_UNCONFIRMED` |
 | 误删除 | No delete path in modules | Static review: no Studio delete automation |
 | 未知 UI 继续点击 | Fail-closed | UNKNOWN layout → unavailable; navigation refuse |

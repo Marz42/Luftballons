@@ -33,6 +33,8 @@
 #     client/src/schemas/installation.ts
 #   Keys must use the `luftballons.` prefix (enforced by grepping those files
 #   for setItem/getItem string literals that are not luftballons.*).
+# - Installation token uses GM_getValue/GM_setValue/GM_deleteValue (private
+#   userscript storage), not page localStorage. @grant may list those three only.
 # - Comments that mention forbidden APIs without calling them
 #   (e.g. "no untrusted innerHTML").
 # - MutationObserver in waitForDomTarget (bounded + disconnect) is audited
@@ -136,6 +138,23 @@ if require_file "$DIST"; then
     while IFS= read -r line; do note "  $line"; done <<<"$connects"
   else
     note "OK: no @connect"
+  fi
+
+  grants="$(printf '%s\n' "$header" | rg -n '^\s*//\s*@grant\s+' || true)"
+  if [[ -z "$grants" ]]; then
+    fail "dist header has no @grant lines"
+  else
+    while IFS= read -r line; do
+      [[ -z "$line" ]] && continue
+      value="$(printf '%s\n' "$line" | sed -E 's/^[^:]+:[[:space:]]*\/\/[[:space:]]*@grant[[:space:]]+//')"
+      case "$value" in
+        none|GM_getValue|GM_setValue|GM_deleteValue) ;;
+        *)
+          fail "disallowed @grant: $value"
+          ;;
+      esac
+    done <<<"$grants"
+    note "OK: @grant allowlist (storage only; no GM_xmlhttpRequest)"
   fi
 fi
 

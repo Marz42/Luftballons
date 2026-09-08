@@ -21,6 +21,7 @@ import type {
 import {
   CONTENT_VIDEO_ROW_SELECTOR,
   CONTENT_FIELDS,
+  extractChannelIdFromHref,
   isActiveElement,
   getTarget,
 } from "../../selectors.js";
@@ -82,15 +83,27 @@ function warn(
   warnings.push({ code, message });
 }
 
-function channelIdFromHref(href: string): string | undefined {
-  try {
-    const pathname = new URL(href, "https://studio.youtube.com").pathname;
-    const match = pathname.match(/\/channel\/([^/]+)/i);
-    const id = match?.[1];
-    return id && id.length > 0 ? id : undefined;
-  } catch {
-    return undefined;
+/**
+ * Re-verify channel identity after navigation. Fail-closed when expected id is set.
+ */
+export function recheckChannelBinding(
+  getHref: () => string,
+  expectedChannelId: string,
+): { ok: true } | { ok: false; message: string } {
+  const current = extractChannelIdFromHref(getHref());
+  if (!current) {
+    return {
+      ok: false,
+      message: `No channel id in href=${getHref()}`,
+    };
   }
+  if (current !== expectedChannelId) {
+    return {
+      ok: false,
+      message: `Expected channel=${expectedChannelId}, current=${current}`,
+    };
+  }
+  return { ok: true };
 }
 
 function metricText(el: Element | null): string | null {
@@ -334,13 +347,45 @@ export async function runChannelBasicCollector(
     };
   };
 
+  const stopOnChannelSwitch = async (
+    check: { message: string },
+  ): Promise<TaskResult> => {
+    warn(warnings, "CHANNEL_SWITCHED", check.message);
+    const built = validateAndBuild(draft, warnings, capturedAt);
+    const hasPayload =
+      draft.channelName.trim().length > 0 ||
+      draft.views !== undefined ||
+      draft.subscriberDelta !== undefined ||
+      draft.recentVideos.length > 0;
+    if (hasPayload) {
+      const collection = await saveCollection(
+        ctx,
+        deps,
+        built.data,
+        "PARTIAL",
+        capturedAt,
+      );
+      return {
+        status: "PARTIAL",
+        summary: `Channel switched mid-collection; partial data retained (${check.message})`,
+        collectionIds: [collection.collectionId],
+        warnings: [...warnings],
+      };
+    }
+    return {
+      status: "FAILED",
+      summary: `Channel switched; no data retained (${check.message})`,
+      warnings: [...warnings],
+    };
+  };
+
   try {
     throwIfAborted(ctx.signal);
     ctx.logger.info("Detect channel context");
 
-    const channelId = channelIdFromHref(deps.getHref());
-    if (channelId !== undefined) {
-      draft.channelId = channelId;
+    const expectedChannelId = extractChannelIdFromHref(deps.getHref());
+    if (expectedChannelId) {
+      draft.channelId = expectedChannelId;
     }
     const nameEl = await deps.dom.find(getTarget("channel.name"));
     const nameText = nameEl?.id === "entity-name" ? directText(nameEl) : metricText(nameEl);
@@ -355,6 +400,12 @@ export async function runChannelBasicCollector(
       await deps.navigation.navigate("DASHBOARD", ctx.signal);
     }
     await deps.navigation.waitReady("DASHBOARD", undefined, ctx.signal);
+    if (expectedChannelId) {
+      const bind = recheckChannelBinding(deps.getHref, expectedChannelId);
+      if (!bind.ok) {
+        return stopOnChannelSwitch(bind);
+      }
+    }
 
     throwIfAborted(ctx.signal);
 
@@ -394,6 +445,12 @@ export async function runChannelBasicCollector(
       ctx.logger.info("Navigate Analytics for missing metrics");
       await deps.navigation.navigate("ANALYTICS", ctx.signal);
       await deps.navigation.waitReady("ANALYTICS", undefined, ctx.signal);
+      if (expectedChannelId) {
+        const bind = recheckChannelBinding(deps.getHref, expectedChannelId);
+        if (!bind.ok) {
+          return stopOnChannelSwitch(bind);
+        }
+      }
       throwIfAborted(ctx.signal);
 
       const analyticsPeriod = await deps.dom.readText(getTarget("analytics.period"));
@@ -433,6 +490,12 @@ export async function runChannelBasicCollector(
     ctx.logger.info("Navigate Content for recent videos");
     await deps.navigation.navigate("CONTENT", ctx.signal);
     await deps.navigation.waitReady("CONTENT", undefined, ctx.signal);
+    if (expectedChannelId) {
+      const bind = recheckChannelBinding(deps.getHref, expectedChannelId);
+      if (!bind.ok) {
+        return stopOnChannelSwitch(bind);
+      }
+    }
     throwIfAborted(ctx.signal);
 
     // A SPA shell can be ready before its rows/cells arrive. Observe content

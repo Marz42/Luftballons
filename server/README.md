@@ -22,6 +22,13 @@ cd server
 export ADMIN_PASSWORD='choose-a-strong-password'
 export LUFTBALLONS_DB_PATH=./data/luftballons.db
 
+# Registration is disabled by default. For an install window only:
+# export LUFTBALLONS_ALLOW_REGISTRATION=true
+# export LUFTBALLONS_ENROLLMENT_SECRET='shared-install-secret'
+
+# Optional CORS extension (defaults: studio.youtube.com + www.youtube.com):
+# export LUFTBALLONS_ALLOW_ORIGINS='https://studio.youtube.com,https://www.youtube.com'
+
 # Recommended for local / single-operator use:
 .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000
 
@@ -33,6 +40,10 @@ If `ADMIN_PASSWORD` is unset, every `/admin*` request returns **401** (no weak
 default password). API data endpoints (`/api/v1/*`) do not require admin password;
 they use Installation Bearer tokens.
 
+**Client vs server version:** client userscript/runtime version comes from
+`client/package.json`. FastAPI `version` / `server/pyproject.toml` is the server
+package version and may differ.
+
 Admin Basic Auth username: `admin`  
 Browser: open `http://127.0.0.1:8000/admin/`
 
@@ -40,7 +51,7 @@ Browser: open `http://127.0.0.1:8000/admin/`
 
 | Method | Path | Auth |
 |--------|------|------|
-| POST | `/api/v1/installations/register` | none (returns token once) |
+| POST | `/api/v1/installations/register` | Enrollment gate (`LUFTBALLONS_ALLOW_REGISTRATION` + secret); returns token once |
 | POST | `/api/v1/collections` | Bearer |
 | GET | `/api/v1/config` | Bearer |
 | POST | `/api/v1/errors` | Bearer |

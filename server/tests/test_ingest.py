@@ -7,11 +7,13 @@ import json
 from sqlalchemy import func, select
 
 from app.models.collection import Collection
+from helpers import register_headers
 
 
 def _register(client, name: str = "PC-A") -> tuple[str, str]:
     body = client.post(
         "/api/v1/installations/register",
+        headers=register_headers(),
         json={"display_name": name, "runtime_version": "0.1.0"},
     ).json()
     return body["installation_id"], body["token"]
@@ -137,6 +139,7 @@ def test_data_survives_server_reopen(db_path, reopen_client):
     try:
         reg = client_a.post(
             "/api/v1/installations/register",
+            headers=register_headers(),
             json={"display_name": "PC-C"},
         ).json()
         installation_id, token = reg["installation_id"], reg["token"]
@@ -170,3 +173,32 @@ def test_data_survives_server_reopen(db_path, reopen_client):
         from app.main import app
 
         app.dependency_overrides.clear()
+
+
+def test_ingest_concurrent_same_collection_id(client, session_factory):
+    """Two overlapping inserts for the same collection_id → one 201, one 200, one row."""
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    installation_id, token = _register(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    body = _payload(installation_id, collection_id="col-race")
+    barrier = threading.Barrier(2)
+
+    def once() -> tuple[int, dict]:
+        barrier.wait(timeout=5)
+        response = client.post("/api/v1/collections", headers=headers, json=body)
+        return response.status_code, response.json()
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(once), pool.submit(once)]
+        outcomes = [f.result(timeout=10) for f in futures]
+
+    statuses = sorted(code for code, _ in outcomes)
+    assert statuses == [200, 201]
+    assert all("already_ingested" in body for _, body in outcomes)
+    assert {body["already_ingested"] for _, body in outcomes} == {True, False}
+
+    with session_factory() as session:
+        count = session.scalar(select(func.count()).select_from(Collection))
+        assert count == 1

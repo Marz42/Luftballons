@@ -13,8 +13,11 @@ export interface BundledDefaults {
   networkMode: "OFF" | "MANUAL" | "ENABLED";
 }
 
+declare const __LUFTBALLONS_RUNTIME_VERSION__: string;
+
 export const BUNDLED_DEFAULTS: BundledDefaults = {
-  runtimeVersion: "0.1.0",
+  // Injected from client/package.json via Vite define (single source of truth).
+  runtimeVersion: __LUFTBALLONS_RUNTIME_VERSION__,
   /** IMPLEMENTATION §22 — MANUAL default; actual mode persisted in localStorage. */
   networkMode: "MANUAL",
 };

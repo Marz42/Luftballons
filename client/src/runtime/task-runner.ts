@@ -119,29 +119,12 @@ export class TaskRunner {
   }
 
   async start(moduleId: string): Promise<string> {
+    // Ownership is activeTaskId, not UI TaskState — claim before any await.
     if (this.activeTaskId !== null) {
-      const active = this.tasks.get(this.activeTaskId);
-      if (
-        active &&
-        (active.state === "RUNNING" ||
-          active.state === "WAITING" ||
-          active.state === "WAITING_HUMAN")
-      ) {
-        throw new TaskBusyError();
-      }
+      throw new TaskBusyError();
     }
 
     const module = this.registry.require(moduleId);
-    const location = this.getLocation();
-    const availability = await module.detect({
-      hostname: location.hostname,
-      href: location.href,
-      logger: this.logger,
-    });
-    if (!availability.available) {
-      throw new ModuleUnavailableError(moduleId, availability.reason);
-    }
-
     const taskId = this.createTaskId();
     const controller = new AbortController();
     const task: InternalTask = {
@@ -154,6 +137,30 @@ export class TaskRunner {
     this.tasks.set(taskId, task);
     this.activeTaskId = taskId;
     this.emit(task);
+
+    const location = this.getLocation();
+    let availability;
+    try {
+      availability = await module.detect({
+        hostname: location.hostname,
+        href: location.href,
+        logger: this.logger,
+      });
+    } catch (error) {
+      this.releaseStartLock(task);
+      throw error;
+    }
+
+    if (task.state === "CANCELLED" || controller.signal.aborted) {
+      this.finalizeCancelled(task);
+      return taskId;
+    }
+
+    if (!availability.available) {
+      this.releaseStartLock(task);
+      throw new ModuleUnavailableError(moduleId, availability.reason);
+    }
+
     this.logger.info("Task started", { taskId, moduleId });
 
     const capabilities = new CapabilityManager(module.capabilities);
@@ -192,11 +199,17 @@ export class TaskRunner {
       status: "CANCELLED",
       summary: "Cancelled by user",
     };
-    if (this.activeTaskId === taskId) {
-      this.activeTaskId = null;
-    }
+    // Keep activeTaskId until runModule / detect path settles.
     this.logger.info("Task cancelled", { taskId, moduleId: task.moduleId });
     this.emit(task);
+  }
+
+  /** Drop a reserved task that never entered runModule (detect failure). */
+  private releaseStartLock(task: InternalTask): void {
+    this.tasks.delete(task.taskId);
+    if (this.activeTaskId === task.taskId) {
+      this.activeTaskId = null;
+    }
   }
 
   setProgress(taskId: string, message: string, state: TaskState = "RUNNING"): void {

@@ -8,6 +8,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import admin, collections, config, errors, installations
+from app.config import settings
 from app.db import init_db
 
 
@@ -23,14 +24,14 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# Userscript runs on Studio origin with grant none → browser CORS applies.
-# Authorization header (Bearer) only; no cookies. Internal LAN MVP.
+# Userscript fetch runs as Studio page origin. Default allowlist — not "*".
+# Extend via LUFTBALLONS_ALLOW_ORIGINS (comma-separated).
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=settings.allow_origins,
     allow_credentials=False,
     allow_methods=["GET", "POST", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type"],
+    allow_headers=["Authorization", "Content-Type", "X-Luftballons-Enrollment"],
 )
 
 app.include_router(installations.router)

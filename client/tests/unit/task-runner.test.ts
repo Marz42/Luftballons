@@ -140,6 +140,90 @@ describe("TaskRunner", () => {
     });
   });
 
+  it("rejects concurrent start during detect with TaskBusyError; only one run()", async () => {
+    fixture = mountStudioFixture({ layout: "2026_V1" });
+    let releaseDetect!: () => void;
+    const detectGate = new Promise<void>((resolve) => {
+      releaseDetect = resolve;
+    });
+    let detectEntered = 0;
+    const runCalls: string[] = [];
+
+    const module: LuftballonsModule = {
+      id: "youtube.channel.basic",
+      name: "YouTube Basic Channel Collector",
+      version: "0.1.0",
+      site: "youtube-studio",
+      capabilities: ["READ", "NAVIGATE", "LOCAL_EXPORT"],
+      detect: async (ctx) => {
+        detectEntered += 1;
+        await detectGate;
+        return studioModuleAvailability({
+          hostname: ctx.hostname,
+          href: ctx.href,
+          document,
+        });
+      },
+      run: async () => {
+        runCalls.push("run");
+        return { status: "COMPLETED", summary: "done" };
+      },
+    };
+
+    const runner = makeRunner(module);
+    const firstStart = runner.start("youtube.channel.basic");
+    await vi.waitFor(() => {
+      expect(detectEntered).toBe(1);
+    });
+
+    await expect(runner.start("youtube.channel.basic")).rejects.toBeInstanceOf(
+      TaskBusyError,
+    );
+
+    releaseDetect();
+    await expect(firstStart).resolves.toMatch(/^task-/);
+    await vi.waitFor(() => {
+      expect(runCalls).toEqual(["run"]);
+    });
+    expect(detectEntered).toBe(1);
+  });
+
+  it("keeps execution lock after cancel until run settles", async () => {
+    fixture = mountStudioFixture({ layout: "2026_V1" });
+    let releaseRun!: () => void;
+    const runGate = new Promise<void>((resolve) => {
+      releaseRun = resolve;
+    });
+
+    const module = fakeChannelModule(async (ctx: TaskContext) => {
+      await runGate;
+      if (ctx.signal.aborted) {
+        return { status: "CANCELLED", summary: "Cancelled" };
+      }
+      return { status: "COMPLETED", summary: "done" };
+    }, document);
+
+    const runner = makeRunner(module);
+    const taskA = await runner.start("youtube.channel.basic");
+    await runner.cancel(taskA);
+    expect(runner.getState(taskA)).toBe("CANCELLED");
+    expect(runner.getActiveTaskId()).toBe(taskA);
+
+    await expect(runner.start("youtube.channel.basic")).rejects.toBeInstanceOf(
+      TaskBusyError,
+    );
+
+    releaseRun();
+    await vi.waitFor(() => {
+      expect(runner.getActiveTaskId()).toBeNull();
+    });
+
+    const taskB = await runner.start("youtube.channel.basic");
+    await vi.waitFor(() => {
+      expect(runner.getState(taskB)).toBe("COMPLETED");
+    });
+  });
+
   it("cancel aborts signal and ends CANCELLED without further steps", async () => {
     fixture = mountStudioFixture({ layout: "2026_V1" });
     const seen: string[] = [];

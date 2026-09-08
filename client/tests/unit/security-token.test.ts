@@ -12,6 +12,10 @@ import {
   clearServerSettings,
   STORAGE_KEYS,
   saveServerSettings,
+  getServerSettings,
+  getTokenStorage,
+  createMemorySecretStorage,
+  setTokenStorage,
 } from "../../src/services/network-settings.js";
 import { createNetworkService } from "../../src/services/network-service.js";
 import { createLogger } from "../../src/services/logger.js";
@@ -50,16 +54,27 @@ describe("Token handling (§59)", () => {
   afterEach(() => {
     clearServerSettings();
     clearInstallation();
+    setTokenStorage(createMemorySecretStorage());
   });
 
-  it("stores token under luftballons.server.token", () => {
+  it("stores token in private storage, not page localStorage", () => {
     expect(STORAGE_KEYS.token).toBe("luftballons.server.token");
     saveServerSettings({
       baseUrl: "http://127.0.0.1:8000",
       token: SAMPLE_TOKEN,
       networkMode: "MANUAL",
     });
-    expect(localStorage.getItem(STORAGE_KEYS.token)).toBe(SAMPLE_TOKEN);
+    expect(localStorage.getItem(STORAGE_KEYS.token)).toBeNull();
+    expect(getTokenStorage().get(STORAGE_KEYS.token)).toBe(SAMPLE_TOKEN);
+    expect(getServerSettings().token).toBe(SAMPLE_TOKEN);
+  });
+
+  it("migrates legacy localStorage token into private storage once", () => {
+    localStorage.setItem(STORAGE_KEYS.token, SAMPLE_TOKEN);
+    const settings = getServerSettings();
+    expect(settings.token).toBe(SAMPLE_TOKEN);
+    expect(localStorage.getItem(STORAGE_KEYS.token)).toBeNull();
+    expect(getTokenStorage().get(STORAGE_KEYS.token)).toBe(SAMPLE_TOKEN);
   });
 
   it("sync success path logs never contain token plaintext", async () => {

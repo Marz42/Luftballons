@@ -1,8 +1,9 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDomService } from "../../src/services/dom-service.js";
 import {
   createNavigationService,
   NavigationError,
+  pagePostcondition,
 } from "../../src/sites/youtube-studio/navigation.js";
 import {
   mountStudioFixture,
@@ -104,5 +105,47 @@ describe("NavigationService (FT-008)", () => {
     await nav.back();
     await nav.waitReady("DASHBOARD");
     expect(nav.currentPage()).toBe("DASHBOARD");
+  });
+
+  it("pagePostcondition requires URL and DOM agreement (not URL-only)", () => {
+    fixture = mountStudioFixture({ page: "DASHBOARD", layout: "2026_V1" });
+    // URL advanced to CONTENT while DOM remains DASHBOARD.
+    fixture.setHref("https://studio.youtube.com/channel/UC_demo_channel/videos");
+    expect(
+      pagePostcondition("CONTENT", {
+        href: fixture.href,
+        document,
+      }),
+    ).toBe(false);
+    expect(
+      pagePostcondition("DASHBOARD", {
+        href: fixture.href,
+        document,
+      }),
+    ).toBe(false);
+  });
+
+  it("navigate without setHref does not forge success via pushState", async () => {
+    fixture = mountStudioFixture({ page: "DASHBOARD", layout: "2026_V1" });
+    const pushSpy = vi.spyOn(history, "pushState");
+    const dom = createDomService();
+    // Click is a no-op for SPA state; no setHref → must not pushState to fake nav.
+    const nav = createNavigationService({
+      dom: {
+        ...dom,
+        click: async () => {
+          /* intentionally no URL/DOM update */
+        },
+      },
+      getHref: () => fixture!.href,
+      defaultTimeoutMs: 80,
+    });
+
+    await nav.navigate("CONTENT");
+    expect(pushSpy).not.toHaveBeenCalled();
+    await expect(nav.waitReady("CONTENT", 80)).rejects.toMatchObject({
+      code: "TIMEOUT",
+    });
+    pushSpy.mockRestore();
   });
 });

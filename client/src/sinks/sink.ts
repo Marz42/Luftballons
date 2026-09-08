@@ -31,7 +31,7 @@ export type DownloadFn = (
 ) => void;
 
 /**
- * Browser-local download via Blob + object URL (no network, @grant none).
+ * Browser-local download via Blob + object URL (no network).
  */
 export function downloadViaAnchor(
   filename: string,

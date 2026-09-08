@@ -3,6 +3,7 @@
  * Modules must not assign window.location.href directly.
  */
 
+import { abortableDelay } from "../../modules/step-control.js";
 import type { CancellableDomService } from "../../services/dom-service.js";
 import { DomTimeoutError } from "../../services/dom-service.js";
 import {
@@ -78,7 +79,8 @@ function throwIfAborted(signal?: AbortSignal): void {
 }
 
 /**
- * Postcondition: layout known + detected page equals expected.
+ * Automation postcondition: layout known AND URL page AND DOM page all match.
+ * Distinct from detectStudio merge, which may report URL-only while SPA settles.
  */
 export function pagePostcondition(
   expected: StudioPage,
@@ -91,7 +93,9 @@ export function pagePostcondition(
   if (detection.layout === "UNKNOWN") {
     return false;
   }
-  return detection.page === expected;
+  return (
+    detection.urlPage === expected && detection.domPage === expected
+  );
 }
 
 export function createNavigationService(
@@ -169,16 +173,13 @@ export function createNavigationService(
       if (pagePostcondition(page, { href: getHref(), document: doc })) {
         return;
       }
-      await new Promise<void>((resolve, reject) => {
-        const t = window.setTimeout(resolve, 20);
-        const onAbort = (): void => {
-          window.clearTimeout(t);
-          reject(abortError());
-        };
-        if (signal) {
-          signal.addEventListener("abort", onAbort, { once: true });
-        }
-      });
+      if (signal) {
+        await abortableDelay(20, signal);
+      } else {
+        await new Promise<void>((resolve) => {
+          window.setTimeout(resolve, 20);
+        });
+      }
     }
 
     throw new NavigationError(
@@ -218,28 +219,13 @@ export function createNavigationService(
     await options.dom.click(navTarget);
     throwIfAborted(signal);
 
-    // If click did not update href (fixture without real router), apply href
-    // from the anchor. assumption, calibrate on real device: Studio SPA
-    // usually updates history on sidebar click; location.assign is last resort.
+    // Tests inject setHref to simulate SPA history. Production must not
+    // forge navigation via history.pushState — waitReady fails closed.
     const hrefAttr = el.getAttribute("href");
     if (hrefAttr && setHref) {
       const next = new URL(hrefAttr, getHref()).href;
       if (next !== getHref()) {
         setHref(next);
-      }
-    } else if (hrefAttr && !setHref) {
-      // assumption, calibrate on real device: only when no SPA anchor handler
-      // updated location — modules still must not touch location themselves.
-      const next = new URL(hrefAttr, getHref()).href;
-      if (
-        typeof location !== "undefined" &&
-        next !== location.href &&
-        !pagePostcondition(target, { href: getHref(), document: doc })
-      ) {
-        // Prefer pushState over full reload when possible.
-        if (typeof history !== "undefined" && history.pushState) {
-          history.pushState({}, "", next);
-        }
       }
     }
   };

@@ -6,6 +6,7 @@
   "scripts": {
     "build": "pnpm --filter @luftballons/client build",
     "test": "pnpm --filter @luftballons/client test",
+    "typecheck": "pnpm --filter @luftballons/client exec tsc --noEmit -p tsconfig.json",
     "dev": "pnpm --filter @luftballons/client build --watch"
   },
   "engines": {

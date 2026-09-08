@@ -14,11 +14,13 @@ from app.services.remote_config import (
     save_active_config,
     sanitize_config_payload,
 )
+from helpers import register_headers
 
 
 def _register(client, name: str = "PC-A") -> tuple[str, str]:
     body = client.post(
         "/api/v1/installations/register",
+        headers=register_headers(),
         json={"display_name": name, "runtime_version": "0.1.0"},
     ).json()
     return body["installation_id"], body["token"]

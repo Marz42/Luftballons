@@ -37,6 +37,8 @@ export interface RegisterInstallationOptions {
   baseUrl: string;
   displayName?: string;
   runtimeVersion?: string;
+  /** Server enrollment gate (LUFTBALLONS_ENROLLMENT_SECRET). */
+  enrollmentSecret?: string;
   fetchImpl?: typeof fetch;
 }
 
@@ -212,11 +214,20 @@ export async function registerInstallation(
   if (options.runtimeVersion) {
     body.runtime_version = options.runtimeVersion;
   }
+  if (options.enrollmentSecret) {
+    body.enrollment_secret = options.enrollmentSecret;
+  }
 
   try {
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+    };
+    if (options.enrollmentSecret) {
+      headers["X-Luftballons-Enrollment"] = options.enrollmentSecret;
+    }
     const response = await fetchImpl(url, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers,
       body: JSON.stringify(body),
     });
     if (!response.ok) {

@@ -236,4 +236,24 @@ describe("youtube.channel.basic collector (FT-009)", () => {
     expect(data.summary.views).toBeUndefined();
     expect(data.summary.subscriberDelta).toBeUndefined();
   });
+
+  it("recheckChannelBinding fails closed on channel switch", async () => {
+    const { recheckChannelBinding } = await import(
+      "../../src/sites/youtube-studio/modules/channel-basic/collector.js"
+    );
+    expect(
+      recheckChannelBinding(
+        () => "https://studio.youtube.com/channel/UC_demo_channel/videos",
+        "UC_demo_channel",
+      ).ok,
+    ).toBe(true);
+    const switched = recheckChannelBinding(
+      () => "https://studio.youtube.com/channel/UC_other/analytics",
+      "UC_demo_channel",
+    );
+    expect(switched.ok).toBe(false);
+    if (!switched.ok) {
+      expect(switched.message).toContain("UC_other");
+    }
+  });
 });

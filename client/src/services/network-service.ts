@@ -5,6 +5,7 @@
 
 import type { Collection } from "../schemas/collection.js";
 import type { Logger } from "../runtime/types.js";
+import { BUNDLED_DEFAULTS } from "../runtime/runtime.js";
 import {
   getServerSettings,
   saveServerSettings,
@@ -73,6 +74,7 @@ export interface NetworkService {
 
   registerInstallation(options?: {
     displayName?: string;
+    enrollmentSecret?: string;
   }): Promise<RegisterInstallationResult>;
 }
 
@@ -97,7 +99,7 @@ export function createNetworkService(
 ): NetworkService {
   const storage = options.storage ?? localStorage;
   const logger = options.logger;
-  const runtimeVersion = options.runtimeVersion ?? "0.1.0";
+  const runtimeVersion = options.runtimeVersion ?? BUNDLED_DEFAULTS.runtimeVersion;
   const fetchImpl = options.fetchImpl;
 
   let applied: AppliedConfigState =
@@ -299,6 +301,9 @@ export function createNetworkService(
         runtimeVersion,
         ...(registerOptions.displayName !== undefined
           ? { displayName: registerOptions.displayName }
+          : {}),
+        ...(registerOptions.enrollmentSecret !== undefined
+          ? { enrollmentSecret: registerOptions.enrollmentSecret }
           : {}),
         ...(fetchImpl !== undefined ? { fetchImpl } : {}),
       });

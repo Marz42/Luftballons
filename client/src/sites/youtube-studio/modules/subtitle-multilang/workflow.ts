@@ -8,6 +8,7 @@ import type {
   TaskResult,
   TaskWarning,
 } from "../../../../runtime/types.js";
+import { abortableDelay } from "../../../../modules/step-control.js";
 import {
   createDomService,
   type CancellableDomService,
@@ -308,14 +309,7 @@ async function waitForLanguageListSettled(
   let last: LanguageListParseResult | { kind: "MISSING" } = first;
   while (Date.now() <= deadline) {
     throwIfAborted(signal);
-    await new Promise<void>((resolve, reject) => {
-      const t = window.setTimeout(() => { signal.removeEventListener("abort", onAbort); resolve(); }, 20);
-      const onAbort = (): void => {
-        window.clearTimeout(t);
-        reject(new DOMException("Aborted", "AbortError"));
-      };
-      signal.addEventListener("abort", onAbort, { once: true });
-    });
+    await abortableDelay(20, signal);
     last = await parseLanguageList(dom);
     if (last.kind !== "EMPTY" || await hasConfirmedEmptyList(dom)) {
       return last;
@@ -416,14 +410,7 @@ async function waitPickerClosed(
     if (!picker) {
       return;
     }
-    await new Promise<void>((resolve, reject) => {
-      const t = window.setTimeout(resolve, 20);
-      const onAbort = (): void => {
-        window.clearTimeout(t);
-        reject(new DOMException("Aborted", "AbortError"));
-      };
-      signal.addEventListener("abort", onAbort, { once: true });
-    });
+    await abortableDelay(20, signal);
   }
   throw new WaitTimeoutError(
     "Language picker did not close after option selection",

@@ -52,6 +52,17 @@ export function createServerSection(runtime: Runtime): ServerSectionHandle {
   tokenInput.setAttribute("data-lb-server-token", "true");
   tokenLabel.append(tokenCaption, tokenInput);
 
+  const enrollLabel = document.createElement("label");
+  enrollLabel.className = "lb-field";
+  const enrollCaption = document.createElement("span");
+  text(enrollCaption, "Enrollment（仅注册时）");
+  const enrollInput = document.createElement("input");
+  enrollInput.type = "password";
+  enrollInput.autocomplete = "off";
+  enrollInput.placeholder = "服务器 enrollment secret";
+  enrollInput.setAttribute("data-lb-enrollment", "true");
+  enrollLabel.append(enrollCaption, enrollInput);
+
   const modeLabel = document.createElement("label");
   modeLabel.className = "lb-field";
   const modeCaption = document.createElement("span");
@@ -115,6 +126,7 @@ export function createServerSection(runtime: Runtime): ServerSectionHandle {
     hint,
     baseLabel,
     tokenLabel,
+    enrollLabel,
     modeLabel,
     idBox,
     configBox,
@@ -201,7 +213,10 @@ export function createServerSection(runtime: Runtime): ServerSectionHandle {
         setMsg("网络模式为 OFF，无法注册", true);
         return;
       }
-      const result = await runtime.network.registerInstallation();
+      const enrollmentSecret = enrollInput.value.trim();
+      const result = await runtime.network.registerInstallation({
+        ...(enrollmentSecret ? { enrollmentSecret } : {}),
+      });
       if (result.status === "FAILED") {
         setMsg(result.message ?? "注册失败", true);
         return;

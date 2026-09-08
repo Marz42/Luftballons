@@ -13,11 +13,13 @@ from sqlalchemy.orm import Session, sessionmaker
 # Ensure tests never touch the developer default DB.
 _TEST_DB = Path(__file__).resolve().parent / "_tmp_test.db"
 os.environ["LUFTBALLONS_DATABASE_URL"] = f"sqlite:///{_TEST_DB}"
+# Enrollment open for default API fixtures; dedicated tests toggle via settings.reload().
+os.environ.setdefault("LUFTBALLONS_ALLOW_REGISTRATION", "true")
+os.environ.setdefault("LUFTBALLONS_ENROLLMENT_SECRET", "test-enrollment-secret")
 
 
 from app.db import Base, create_db_engine, init_db  # noqa: E402
 from app.main import app  # noqa: E402
-
 
 @pytest.fixture()
 def db_path(tmp_path: Path) -> Path:
