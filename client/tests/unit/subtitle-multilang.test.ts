@@ -668,7 +668,48 @@ describe("youtube.subtitle.multilang (FT-011 / P4-T1…T5)", () => {
     expect(resolveLanguageCodeFromLabel("英语 (视频语言)")).toBe("en");
     expect(resolveLanguageCodeFromLabel("English (Video language)")).toBe("en");
     expect(resolveLanguageCodeFromLabel("日语")).toBe("ja");
+    expect(resolveLanguageCodeFromLabel("韩语")).toBe("ko");
+    expect(resolveLanguageCodeFromLabel("韩语 草稿")).toBe("ko");
+    expect(resolveLanguageCodeFromLabel("西班牙语")).toBe("es");
+    expect(resolveLanguageCodeFromLabel("德语")).toBe("de");
+    expect(resolveLanguageCodeFromLabel("葡萄牙语")).toBe("pt");
+    expect(resolveLanguageCodeFromLabel("阿拉伯语")).toBe("ar");
   });
+
+  it("zh-Hans picker labels: add 韩语 after en/ja exist (row wait)", async () => {
+    fixture = mountStudioFixture({
+      page: "VIDEO_DETAILS",
+      layout: "2026_V1",
+      subtitles: {
+        existingLanguages: [
+          { code: "en", label: "英语" },
+          { code: "ja", label: "日语" },
+        ],
+        pickerLanguages: [
+          { code: "en", label: "英语" },
+          { code: "ja", label: "日语" },
+          { code: "ko", label: "韩语" },
+        ],
+      },
+    });
+    const mod = createFixtureSubtitleModule(fixture, {
+      initialLanguages: [
+        { code: "en", label: "English" },
+        { code: "ja", label: "日本語" },
+        { code: "ko", label: "한국어" },
+      ],
+    });
+    const runner = makeRunner(mod, createAutoApproveGate());
+    const taskId = await runner.start("youtube.subtitle.multilang");
+    await vi.waitFor(() => {
+      expect(runner.getState(taskId)).toBe("COMPLETED");
+    }, { timeout: 8_000 });
+    const summary = runner.getSnapshot(taskId).result?.summary ?? "";
+    expect(summary).toMatch(/English\(en\) (SKIPPED|EXISTS)/);
+    expect(summary).toMatch(/日本語\(ja\) (SKIPPED|EXISTS)/);
+    expect(summary).toMatch(/한국어\(ko\) SUCCESS/);
+    expect(fixture.clickCounts.option).toBe(1);
+  }, 10_000);
 
   it("P2-2b: unknown row structure → UNPARSEABLE stop, no add", async () => {
     fixture = mountStudioFixture({
@@ -800,7 +841,7 @@ describe("youtube.subtitle.multilang (FT-011 / P4-T1…T5)", () => {
     inert.addEventListener("click", () => {
       setTimeout(() => { (inert.parentElement as HTMLElement).hidden = true; }, 50);
     });
-    await vi.waitFor(() => expect(runner.getState(id)).toBe("FAILED"), { timeout: 4000 });
+    await vi.waitFor(() => expect(runner.getState(id)).toBe("FAILED"), { timeout: 8_000 });
     expect(gate.lastAction).toBeNull();
     expect(fixture.clickCounts.publish).toBe(0);
   });

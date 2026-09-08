@@ -62,6 +62,24 @@ describe("Luftballons panel UI", () => {
       ...(shadow?.querySelectorAll(".lb-module .lb-btn") ?? []),
     ].map((el) => el.textContent ?? "");
     expect(startLabels.some((t) => t.includes("采集频道数据"))).toBe(true);
+    expect(startLabels.some((t) => t.includes("添加多语言字幕"))).toBe(true);
+
+    // Language checkboxes must survive remote-config gate wrapping.
+    const langBoxes = [
+      ...(shadow?.querySelectorAll<HTMLInputElement>("input[data-lb-lang]") ??
+        []),
+    ];
+    expect(langBoxes.length).toBeGreaterThan(0);
+    const checked = langBoxes
+      .filter((el) => el.checked)
+      .map((el) => el.value)
+      .sort();
+    expect(checked).toEqual(
+      ["ar", "de", "en", "es", "fr", "ja", "ko", "zh-Hans"].sort(),
+    );
+    expect(langBoxes.some((el) => el.value === "pt" && !el.checked)).toBe(
+      true,
+    );
   });
 
   it("shows unavailable on www.youtube.com", async () => {

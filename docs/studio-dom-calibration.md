@@ -88,11 +88,23 @@ Sanitized live page `/video/<VIDEO_ID>/translations`:
 | Details tab | `a#menu-item-0[href="/video/<VIDEO_ID>/edit"]` text `详细信息` |
 | Languages table | `#ytgn-video-translations-list-table` `aria-label="翻译"` |
 | Add language | Black control `添加语言` below table (not inside table) |
+| Picker | Searchable dropdown; options are Chinese labels (拼音序), e.g. `阿拉伯语` |
 | Picker option | `tp-yt-paper-item[role=option]` text `日语` (label-only, no data-language-code) |
-| Label map | `日语` → `ja`; `英语 （视频语言）` strips parentheticals |
+| Already-added option | Greyed / non-selectable (e.g. `阿尔巴尼亚语` while already in list) |
+| Label map | `日语` → `ja`; `韩语` → `ko`; `英语（视频语言）` / `英语 (视频语言)` strips parentheticals |
+| Row order | **Not stable across accounts/videos** — e.g. `日语` first then `英语（视频语言）` then extras, or interleaved with `爱尔兰语` / `阿尔巴尼亚语`. Match by label/code only; never by index. |
 | Persistence gap | Selecting a language may show a transient table row that disappears on refresh when no caption file / auto-translate is available — not a publish success |
 
-### Real Studio multilang publish path (2026-09-08 screenshots + operator steps)
+### Add-language path variants (RC must handle both)
+
+| Variant | After picking a language in 添加语言 | Evidence |
+| --- | --- | --- |
+| **A — list append** | List gains a new row immediately; no intermediate sheet | Operator account 2026-09-08 (screenshots: 阿尔巴尼亚语 / 爱尔兰语 rows) |
+| **B — sheet then translate** | Card/sheet → **手动字幕 → 添加** → **自动翻译** → language-editor **发布** | Earlier operator path on other accounts |
+
+Layout/order of language rows and which variant appears **differ by account**. RC adaptation = label-based matching + disabled-option skip + branch on post-select UI (row vs sheet), not a single fixed DOM sequence.
+
+### Real Studio multilang publish path (variant B; 2026-09-08)
 
 Operator-confirmed sequence on the **语言** (`/translations`) surface:
 
@@ -102,10 +114,10 @@ Operator-confirmed sequence on the **语言** (`/translations`) surface:
 4. On the next card, choose **自动翻译** (requires a usable source track on 视频语言).
 5. **发布** becomes enabled (highlighted) → publish.
 
-UI notes from screenshots: 视频语言 (e.g. `中文（繁体）`) is the auto-translate source; **自动翻译** stays disabled without source captions; publish is on the **language editor** chrome, not a single list-row control.
+UI notes: 视频语言 (e.g. `英语（视频语言）`) is the auto-translate source; **自动翻译** stays disabled without source captions; publish is on the **language editor** chrome, not a list-row control. Variant A accounts still need a calibrated path from list row → editor → 发布 (待真机：点击语言行后的 DOM).
 
-**Automation gap:** current `youtube.subtitle.multilang` still assumes list-page add + list-page publish + Human Gate. It does **not** yet drive steps 3–5 (手动字幕 → 自动翻译 → 编辑器 发布). Live COMPLETED with `EXISTS` / `published=false` only proves list-level add/skip, not WRITE_COMMIT of translated tracks.
+**Automation gap:** current `youtube.subtitle.multilang` still assumes list-page add + list-page publish + Human Gate. It does **not** yet drive variant B steps 3–5, nor variant A “open row → publish”. Live Studio has no English list-page `Publish` under the translations table → fail-closes with `PUBLISH_SURFACE_MISSING` **before** irreversible Commit. Live COMPLETED with `EXISTS` / `published=false` only proves list-level add/skip, not WRITE_COMMIT.
 
-Code updates from this evidence: `page.subtitles.title`, label maps (`日语`/`法语`), add/picker option hosts. Full translate+publish path remains **待真机 / 待校准**.
+Code updates from this evidence: `page.subtitles.title`, label maps (`日语`/`法语`/`韩语`/…), add/picker option hosts, skip disabled picker options, default targets de/ja/fr/en/es/ar/ko/zh-Hans. Full translate+publish path remains **待真机 / 待校准**.
 
 Automated validation for this change: client unit tests + Vite build.

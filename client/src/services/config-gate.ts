@@ -4,6 +4,9 @@
  *
  * Kill switch / enabled=false only apply when source is cached|fresh
  * (i.e. a remote config was successfully obtained at least once).
+ *
+ * Extra module methods (e.g. subtitle setTargetLanguages / getTargetLanguages)
+ * must be preserved — panel UI depends on them.
  */
 
 import type {
@@ -13,6 +16,30 @@ import type {
 } from "../runtime/types.js";
 import type { AppliedConfigState } from "./config-service.js";
 import { isRuntimeAtLeast } from "./config-service.js";
+
+type SubtitleLangControls = {
+  setTargetLanguages: (languages: { code: string; label: string }[]) => void;
+  getTargetLanguages: () => { code: string; label: string }[];
+};
+
+function withPreservedExtras(
+  original: LuftballonsModule,
+  wrapped: LuftballonsModule,
+): LuftballonsModule {
+  const extra = original as LuftballonsModule & Partial<SubtitleLangControls>;
+  if (
+    typeof extra.setTargetLanguages === "function" &&
+    typeof extra.getTargetLanguages === "function"
+  ) {
+    const setTargetLanguages = extra.setTargetLanguages.bind(extra);
+    const getTargetLanguages = extra.getTargetLanguages.bind(extra);
+    return Object.assign(wrapped, {
+      setTargetLanguages,
+      getTargetLanguages,
+    });
+  }
+  return wrapped;
+}
 
 export function withRemoteConfigGate(
   module: LuftballonsModule,
@@ -79,21 +106,7 @@ export function withRemoteConfigGate(
     return base;
   };
 
-  if (module.cleanup) {
-    const cleanup = module.cleanup.bind(module);
-    return {
-      id: module.id,
-      name: module.name,
-      version: module.version,
-      site: module.site,
-      capabilities: module.capabilities,
-      cleanup,
-      run: (ctx) => module.run(ctx),
-      detect,
-    };
-  }
-
-  return {
+  const wrapped: LuftballonsModule = {
     id: module.id,
     name: module.name,
     version: module.version,
@@ -101,5 +114,10 @@ export function withRemoteConfigGate(
     capabilities: module.capabilities,
     run: (ctx) => module.run(ctx),
     detect,
+    ...(module.cleanup
+      ? { cleanup: module.cleanup.bind(module) }
+      : {}),
   };
+
+  return withPreservedExtras(module, wrapped);
 }

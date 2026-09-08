@@ -25,6 +25,8 @@ import {
 } from "../../selectors.js";
 import {
   formatOutcomesSummary,
+  labelAliasesForLanguage,
+  pickerFilterQueryForLanguage,
   resolveLanguageCodeFromLabel,
   type LanguageListParseResult,
   type LanguageOutcome,
@@ -370,39 +372,20 @@ async function waitForPublishedRow(
   }
 }
 
+function isDisabledControl(el: Element): boolean {
+  if (el.hasAttribute("disabled") || el.getAttribute("aria-disabled") === "true") {
+    return true;
+  }
+  const host = el.closest("[disabled], [aria-disabled='true']");
+  return host !== null;
+}
+
 function optionTargetFor(lang: SubtitleLanguage): DomTarget {
-  const labelAliases = new Set<string>([
-    lang.label.replace(/\s+/g, " ").trim(),
-    lang.code,
-  ]);
-  // zh-Hans Studio picker uses localized names (2026-09-08 evidence: 日语-style list).
-  if (lang.code.toLowerCase() === "ja") {
-    labelAliases.add("日语");
-    labelAliases.add("日本語");
-  }
-  if (lang.code.toLowerCase() === "en") {
-    labelAliases.add("英语");
-    labelAliases.add("English");
-  }
-  if (lang.code.toLowerCase() === "fr") {
-    labelAliases.add("法语");
-    labelAliases.add("Français");
-    labelAliases.add("French");
-  }
-  if (lang.code.toLowerCase() === "ko") {
-    labelAliases.add("韩语");
-    labelAliases.add("한국어");
-  }
-  if (lang.code.toLowerCase() === "es") {
-    labelAliases.add("西班牙语");
-    labelAliases.add("Español");
-  }
-  if (lang.code.toLowerCase() === "zh-hans") {
-    labelAliases.add("中文（简体）");
-  }
+  const labelAliases = labelAliasesForLanguage(lang);
 
   // Prefer stable option markers — never bare language rows (P1-2).
   // Live 2026-09-08: tp-yt-paper-item[role=option] text「日语」.
+  // Live 2026-09-08: already-added langs are greyed/disabled in picker (阿尔巴尼亚语).
   return {
     id: "subtitle.language.option",
     selectorFallback: [
@@ -416,6 +399,9 @@ function optionTargetFor(lang: SubtitleLanguage): DomTarget {
     ],
     matches: (el) => {
       if (!isActiveElement(el)) {
+        return false;
+      }
+      if (isDisabledControl(el)) {
         return false;
       }
       if (el.closest("ytcp-navigation-drawer")) {
@@ -471,10 +457,7 @@ async function filterPickerForLanguage(
   if (!input) {
     return;
   }
-  const query =
-    lang.code.toLowerCase() === "ja"
-      ? "日语"
-      : lang.label.replace(/\s+/g, " ").trim() || lang.code;
+  const query = pickerFilterQueryForLanguage(lang);
   input.focus();
   input.value = "";
   input.dispatchEvent(new Event("input", { bubbles: true }));
@@ -658,6 +641,7 @@ async function addLanguage(
   throwIfAborted(signal);
 
   // Wait: add result — language appears in translations table (label-only on live).
+  const labelAliases = labelAliasesForLanguage(lang);
   const pendingTarget: DomTarget = {
     id: `subtitle.language.row.${lang.code}`,
     selectorFallback: [
@@ -673,6 +657,14 @@ async function addLanguage(
       if (el.closest("ytcp-navigation-drawer")) {
         return false;
       }
+      // Never treat picker options as translation rows (P1-2c).
+      if (
+        el.hasAttribute("data-luftballons-subtitle-option") ||
+        el.getAttribute("role") === "option" ||
+        el.closest('[data-luftballons-target="subtitle.language.picker"]')
+      ) {
+        return false;
+      }
       if (["PENDING_PUBLISH", "PUBLISHED"].includes(rowStateFromElement(el))) {
         const mapped = languageCodeFromElement(el);
         if (mapped.code?.toLowerCase() === lang.code.toLowerCase()) {
@@ -683,15 +675,26 @@ async function addLanguage(
       if (mapped.code?.toLowerCase() === lang.code.toLowerCase()) {
         return true;
       }
-      // Exact localized labels on table cells (日语 / 日本語).
+      // zh-Hans table cells: 韩语 / 日语 / … (may include trailing status text).
       const text = (el.textContent ?? "").replace(/\s+/g, " ").trim();
-      if (lang.code.toLowerCase() === "ja") {
-        return (
-          text === "日语" ||
-          text === "日本語" ||
-          text.startsWith("日语") ||
-          text.startsWith("日本語")
-        );
+      for (const alias of labelAliases) {
+        if (!alias) {
+          continue;
+        }
+        // Bare BCP codes only match exactly — avoid "en" prefix false positives.
+        if (alias.toLowerCase() === lang.code.toLowerCase()) {
+          if (text === alias || text.toLowerCase() === alias.toLowerCase()) {
+            return true;
+          }
+          continue;
+        }
+        if (
+          text === alias ||
+          text.startsWith(`${alias} `) ||
+          text.startsWith(alias)
+        ) {
+          return true;
+        }
       }
       return false;
     },
@@ -1042,6 +1045,43 @@ export async function runSubtitleMultilangWorkflow(
       humanRejected: false,
     };
     return buildResult(summary, warnings);
+  }
+
+  // Fail closed before Human Gate when WRITE_COMMIT surface is not calibrated.
+  // Live zh-Hans Studio: 发布 lives on the per-language editor after
+  // 手动字幕 → 自动翻译 — not on the translations list table (2026-09-08).
+  try {
+    const editor = await requireEditor(deps.dom);
+    const publish = getSubtitleTarget("subtitle.publish");
+    if (!(await scopedDom(editor).exists(publish))) {
+      return {
+        status: "FAILED",
+        summary:
+          "Cannot publish: list-page Publish control missing (待校准). Languages were added but not published; pending changes retained.",
+        warnings: [
+          ...warnings,
+          {
+            code: "PUBLISH_SURFACE_MISSING",
+            message:
+              'subtitle.publish not found on translations list. Real Studio WRITE_COMMIT is language-editor 发布 after 手动字幕 → 自动翻译 — not automated yet.',
+          },
+        ],
+      };
+    }
+  } catch (error) {
+    if (isAbortError(error) || ctx.signal.aborted) {
+      throw error;
+    }
+    const message =
+      error instanceof Error ? error.message : "publish surface check failed";
+    return {
+      status: "FAILED",
+      summary: `Cannot publish before Human Gate: ${message}`,
+      warnings: [
+        ...warnings,
+        { code: "PUBLISH_SURFACE_MISSING", message },
+      ],
+    };
   }
 
   // 6) WRITE_COMMIT → Human Gate

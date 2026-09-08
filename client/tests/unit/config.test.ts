@@ -496,6 +496,29 @@ describe("fetch egress allowlist (static)", () => {
   });
 });
 
+describe("withRemoteConfigGate extras", () => {
+  it("preserves subtitle setTargetLanguages after gate wrap", () => {
+    const applied: AppliedConfigState = {
+      source: "defaults",
+      config: { schemaVersion: 1, modules: {} },
+    };
+    const base = {
+      ...availableModule("youtube.subtitle.multilang"),
+      setTargetLanguages(languages: { code: string; label: string }[]) {
+        void languages;
+      },
+      getTargetLanguages() {
+        return [{ code: "fr", label: "Français" }];
+      },
+    };
+    const gated = withRemoteConfigGate(base, () => applied, "0.1.0") as typeof base;
+    expect(typeof gated.setTargetLanguages).toBe("function");
+    expect(gated.getTargetLanguages()).toEqual([
+      { code: "fr", label: "Français" },
+    ]);
+  });
+});
+
 describe("corrupt cache ignored", () => {
   it("loadCachedRemoteConfig returns null on bad payload", () => {
     const storage = memoryStorage();

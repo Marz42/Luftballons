@@ -18,7 +18,7 @@ import {
   studioModuleAvailability,
 } from "../../page-detector.js";
 import {
-  PRESET_SUBTITLE_LANGUAGES,
+  defaultTargetLanguages,
   type SubtitleLanguage,
 } from "./schema.js";
 import {
@@ -47,7 +47,7 @@ export interface SubtitleMultilangModuleOptions {
   getHref?: () => string;
   /** Override document for layout / page detect (tests). */
   detectDocument?: Document;
-  /** Initial target languages (defaults to en + ja). */
+  /** Initial target languages (defaults: de/ja/fr/en/es/ar/ko/zh-Hans). */
   initialLanguages?: SubtitleLanguage[];
   onPublishAttempt?: () => void;
 }
@@ -79,8 +79,7 @@ export function createSubtitleMultilangModule(
     (() => (typeof location !== "undefined" ? location.href : ""));
 
   let targetLanguages: SubtitleLanguage[] =
-    options.initialLanguages ??
-    PRESET_SUBTITLE_LANGUAGES.filter((l) => l.code === "en" || l.code === "ja");
+    options.initialLanguages ?? defaultTargetLanguages();
 
   return {
     id: "youtube.subtitle.multilang",
