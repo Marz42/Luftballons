@@ -660,6 +660,16 @@ describe("youtube.subtitle.multilang (FT-011 / P4-T1…T5)", () => {
     expect(fixture.clickCounts.option).toBe(1); // only ja
   }, 10_000);
 
+  it("P2-2a-live: 英语 （视频语言） maps to en (2026-09-08 evidence)", async () => {
+    const { resolveLanguageCodeFromLabel } = await import(
+      "../../src/sites/youtube-studio/modules/subtitle-multilang/schema.js"
+    );
+    expect(resolveLanguageCodeFromLabel("英语 （视频语言）")).toBe("en");
+    expect(resolveLanguageCodeFromLabel("英语 (视频语言)")).toBe("en");
+    expect(resolveLanguageCodeFromLabel("English (Video language)")).toBe("en");
+    expect(resolveLanguageCodeFromLabel("日语")).toBe("ja");
+  });
+
   it("P2-2b: unknown row structure → UNPARSEABLE stop, no add", async () => {
     fixture = mountStudioFixture({
       page: "VIDEO_DETAILS",

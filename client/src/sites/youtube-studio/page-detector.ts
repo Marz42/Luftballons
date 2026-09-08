@@ -132,9 +132,14 @@ export function detectPageFromDom(doc: Document): StudioPage {
     return "CONTENT";
   }
 
-  // calibrated: Subtitles prep → /translations
+  // calibrated: Subtitles → /video/{id}/translations (video tab) or channel translations
   if (path.includes("/translations")) {
     return "SUBTITLES";
+  }
+
+  // calibrated 2026-09-08: video details tab href …/video/{id}/edit
+  if (path.includes("/video/") && path.includes("/edit")) {
+    return "VIDEO_DETAILS";
   }
 
   // calibrated: Dashboard → pathname exactly /channel/{id}

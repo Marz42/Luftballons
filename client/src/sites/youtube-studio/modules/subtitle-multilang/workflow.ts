@@ -144,9 +144,15 @@ function languageCodeFromElement(el: Element): {
   if (attr && attr.trim()) {
     return { code: attr.trim(), unparseable: false };
   }
-  // Strip trailing fixture state suffix e.g. "英语 (pending)"
-  const raw = (el.textContent ?? "").replace(/\s+/g, " ").trim();
-  const text = raw.replace(/\s*\(pending\)\s*$/i, "").trim();
+  // Prefer language-name cell when present (translations table).
+  const nameCell =
+    el.querySelector(".tablecell-language, [class*='language']") ?? el;
+  const raw = (nameCell.textContent ?? "").replace(/\s+/g, " ").trim();
+  // Strip fixture `(pending)` and live Studio `（视频语言）` / `(Video language)`.
+  const text = raw
+    .replace(/\s*\(pending\)\s*$/i, "")
+    .replace(/\s*[（(][^）)]*[）)]\s*$/u, "")
+    .trim();
   if (!text) {
     return { code: null, unparseable: true };
   }
@@ -179,14 +185,33 @@ function rowStateFromElement(el: Element): SubtitleRowState {
 }
 
 function collectRowElements(list: Element): Element[] {
+  const seen = new Set<Element>();
+  const rows: Element[] = [];
+
+  // calibrated 2026-09-08: translations list is an HTML table
+  if (list instanceof HTMLTableElement || list.id === "ytgn-video-translations-list-table") {
+    for (const el of list.querySelectorAll("tbody tr")) {
+      if (!(el instanceof Element) || seen.has(el)) {
+        continue;
+      }
+      const label = (el.textContent ?? "").replace(/\s+/g, " ").trim();
+      if (!label || /^语言\b/.test(label)) {
+        continue;
+      }
+      seen.add(el);
+      rows.push(el);
+    }
+    if (rows.length > 0) {
+      return rows;
+    }
+  }
+
   const itemSel =
     typeof SUBTITLE_TARGETS["subtitle.language.item"].selectorFallback ===
     "string"
       ? SUBTITLE_TARGETS["subtitle.language.item"].selectorFallback
       : '[data-luftballons-subtitle-lang], [data-language-code]';
 
-  const seen = new Set<Element>();
-  const rows: Element[] = [];
   for (const el of list.querySelectorAll(itemSel)) {
     if (!seen.has(el)) {
       seen.add(el);
@@ -346,18 +371,152 @@ async function waitForPublishedRow(
 }
 
 function optionTargetFor(lang: SubtitleLanguage): DomTarget {
+  const labelAliases = new Set<string>([
+    lang.label.replace(/\s+/g, " ").trim(),
+    lang.code,
+  ]);
+  // zh-Hans Studio picker uses localized names (2026-09-08 evidence: 日语-style list).
+  if (lang.code.toLowerCase() === "ja") {
+    labelAliases.add("日语");
+    labelAliases.add("日本語");
+  }
+  if (lang.code.toLowerCase() === "en") {
+    labelAliases.add("英语");
+    labelAliases.add("English");
+  }
+  if (lang.code.toLowerCase() === "fr") {
+    labelAliases.add("法语");
+    labelAliases.add("Français");
+    labelAliases.add("French");
+  }
+  if (lang.code.toLowerCase() === "ko") {
+    labelAliases.add("韩语");
+    labelAliases.add("한국어");
+  }
+  if (lang.code.toLowerCase() === "es") {
+    labelAliases.add("西班牙语");
+    labelAliases.add("Español");
+  }
+  if (lang.code.toLowerCase() === "zh-hans") {
+    labelAliases.add("中文（简体）");
+  }
+
   // Prefer stable option markers — never bare language rows (P1-2).
+  // Live 2026-09-08: tp-yt-paper-item[role=option] text「日语」.
   return {
     id: "subtitle.language.option",
-    // assumption, calibrate on real device
     selectorFallback: [
       `[data-luftballons-subtitle-option][data-language-code="${lang.code}"]`,
       `[data-language-code="${lang.code}"][data-luftballons-subtitle-option]`,
       `button[data-luftballons-subtitle-option][data-language-code="${lang.code}"]`,
+      'tp-yt-paper-item[role="option"]',
+      '[role="option"]',
+      '[role="menuitem"]',
+      "tp-yt-paper-item",
     ],
-    matches: isActiveElement,
+    matches: (el) => {
+      if (!isActiveElement(el)) {
+        return false;
+      }
+      if (el.closest("ytcp-navigation-drawer")) {
+        return false;
+      }
+      // Prefer the paper-item itself, not nested ytcp-ve / div clones.
+      if (
+        el.tagName.toLowerCase() !== "tp-yt-paper-item" &&
+        el.getAttribute("role") !== "option" &&
+        !el.hasAttribute("data-luftballons-subtitle-option") &&
+        !el.hasAttribute("data-language-code")
+      ) {
+        return false;
+      }
+      const code =
+        el.getAttribute("data-language-code") ??
+        el.getAttribute("data-luftballons-subtitle-lang");
+      if (code && code.toLowerCase() === lang.code.toLowerCase()) {
+        return true;
+      }
+      const text = (el.textContent ?? "").replace(/\s+/g, " ").trim();
+      if (!text || text.length > 40) {
+        return false;
+      }
+      for (const alias of labelAliases) {
+        if (alias && text === alias) {
+          return true;
+        }
+      }
+      return false;
+    },
     unique: true,
   };
+}
+
+/** Prefer typing into picker search so long catalogs need not scroll (live Studio). */
+async function filterPickerForLanguage(
+  picker: Element,
+  lang: SubtitleLanguage,
+  signal: AbortSignal,
+): Promise<void> {
+  throwIfAborted(signal);
+  const portal =
+    picker.closest("tp-yt-iron-dropdown, iron-dropdown, tp-yt-paper-dialog") ??
+    picker;
+  const input =
+    portal.querySelector<HTMLInputElement>(
+      'input:not([type="hidden"]):not([disabled])',
+    ) ??
+    picker.querySelector<HTMLInputElement>(
+      'input:not([type="hidden"]):not([disabled])',
+    );
+  if (!input) {
+    return;
+  }
+  const query =
+    lang.code.toLowerCase() === "ja"
+      ? "日语"
+      : lang.label.replace(/\s+/g, " ").trim() || lang.code;
+  input.focus();
+  input.value = "";
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+  input.value = query;
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+  input.dispatchEvent(new Event("change", { bubbles: true }));
+  await abortableDelay(50, signal);
+}
+
+async function findLanguageOption(
+  picker: Element,
+  lang: SubtitleLanguage,
+  signal: AbortSignal,
+  timeoutMs = 3_000,
+): Promise<Element> {
+  const pickerDom = scopedDom(picker);
+  const option = optionTargetFor(lang);
+  await filterPickerForLanguage(picker, lang, signal);
+  const deadline = Date.now() + timeoutMs;
+  let lastError: unknown;
+  while (Date.now() <= deadline) {
+    throwIfAborted(signal);
+    try {
+      return await pickerDom.waitFor(option, 200, signal);
+    } catch (error) {
+      if (isAbortError(error) || signal.aborted) {
+        throw error;
+      }
+      lastError = error;
+      // Scroll catalog if virtualized / long list.
+      const scrollParent =
+        picker.querySelector("[scrollable], .scrollable, #scroller") ?? picker;
+      if (scrollParent instanceof HTMLElement) {
+        scrollParent.scrollTop += 120;
+      }
+      await abortableDelay(40, signal);
+    }
+  }
+  void lastError;
+  throw new WaitTimeoutError(
+    `Language option not ready for ${lang.code} inside open picker`,
+  );
 }
 
 class UiMismatchError extends Error {
@@ -429,35 +588,47 @@ async function addLanguage(
   const editorDom = scopedDom(editor);
 
   const addBtn = getSubtitleTarget("subtitle.add_language");
-  if (!(await editorDom.exists(addBtn))) {
+  // Live 2026-09-08: 添加语言 sits below the translations table, not inside it.
+  // Fixtures keep the control inside the editor host — try page then editor.
+  const addRoot =
+    (await dom.exists(addBtn)) ? dom : editorDom;
+  if (!(await addRoot.exists(addBtn))) {
     throw new UiMismatchError(
-      `Add-language control missing inside editor (assumption target "${addBtn.id}")`,
+      `Add-language control missing (assumption target "${addBtn.id}"; not in page or editor)`,
     );
   }
   assertBinding();
-  if (!editor.isConnected || !isActiveElement(editor)) throw new UiMismatchError("Editor detached or inactive");
-  await editorDom.click(addBtn);
+  if (!editor.isConnected || !isActiveElement(editor)) {
+    throw new UiMismatchError("Editor detached or inactive");
+  }
+  await addRoot.click(addBtn);
   throwIfAborted(signal);
 
-  // Wait: menu appears (cancellable, no fixed sleep)
+  // Wait: menu appears (may portal outside the table — search page-level)
   const pickerTarget = getSubtitleTarget("subtitle.language.picker");
   let picker: Element;
   try {
-    picker = await editorDom.waitFor(pickerTarget, 2_000, signal);
+    picker = await dom.waitFor(pickerTarget, 2_000, signal);
   } catch (error) {
     if (isAbortError(error) || signal.aborted) {
       throw error;
     }
-    throw new WaitTimeoutError(
-      'Language picker did not appear after Add language (assumption "subtitle.language.picker")',
-    );
+    // Fixture picker is inside editor
+    try {
+      picker = await editorDom.waitFor(pickerTarget, 500, signal);
+    } catch (inner) {
+      if (isAbortError(inner) || signal.aborted) {
+        throw inner;
+      }
+      throw new WaitTimeoutError(
+        'Language picker did not appear after Add language (assumption "subtitle.language.picker")',
+      );
+    }
   }
 
-  const pickerDom = scopedDom(picker);
-  const option = optionTargetFor(lang);
   let found: Element;
   try {
-    found = await pickerDom.waitFor(option, 2_000, signal);
+    found = await findLanguageOption(picker, lang, signal, 3_000);
   } catch (error) {
     if (isAbortError(error) || signal.aborted) {
       throw error;
@@ -469,7 +640,14 @@ async function addLanguage(
 
   throwIfAborted(signal);
   assertBinding();
-  if (!editor.isConnected || !picker.isConnected || !found.isConnected || !isActiveElement(found)) throw new UiMismatchError("Picker/option no longer active");
+  if (
+    !editor.isConnected ||
+    !picker.isConnected ||
+    !found.isConnected ||
+    !isActiveElement(found)
+  ) {
+    throw new UiMismatchError("Picker/option no longer active");
+  }
   if (found instanceof HTMLElement) {
     found.click();
   } else {
@@ -479,20 +657,55 @@ async function addLanguage(
   }
   throwIfAborted(signal);
 
-  // Wait: add result — pending or published row appears in the language list only.
+  // Wait: add result — language appears in translations table (label-only on live).
   const pendingTarget: DomTarget = {
     id: `subtitle.language.row.${lang.code}`,
     selectorFallback: [
       `[data-luftballons-subtitle-lang="${lang.code}"]`,
       `[data-language-code="${lang.code}"]`,
+      "tbody tr",
+      "tr",
     ],
-    matches: el => isActiveElement(el) && ["PENDING_PUBLISH", "PUBLISHED"].includes(rowStateFromElement(el)),
+    matches: (el) => {
+      if (!isActiveElement(el)) {
+        return false;
+      }
+      if (el.closest("ytcp-navigation-drawer")) {
+        return false;
+      }
+      if (["PENDING_PUBLISH", "PUBLISHED"].includes(rowStateFromElement(el))) {
+        const mapped = languageCodeFromElement(el);
+        if (mapped.code?.toLowerCase() === lang.code.toLowerCase()) {
+          return true;
+        }
+      }
+      const mapped = languageCodeFromElement(el);
+      if (mapped.code?.toLowerCase() === lang.code.toLowerCase()) {
+        return true;
+      }
+      // Exact localized labels on table cells (日语 / 日本語).
+      const text = (el.textContent ?? "").replace(/\s+/g, " ").trim();
+      if (lang.code.toLowerCase() === "ja") {
+        return (
+          text === "日语" ||
+          text === "日本語" ||
+          text.startsWith("日语") ||
+          text.startsWith("日本語")
+        );
+      }
+      return false;
+    },
     unique: true,
   };
   try {
-    const list = await editorDom.find(getSubtitleTarget("subtitle.languages.list"));
-    if (!list) throw new UiMismatchError("Language list missing inside editor");
-    await scopedDom(list).waitFor(pendingTarget, 2_000, signal);
+    const list =
+      (await dom.find(getSubtitleTarget("subtitle.languages.list"))) ??
+      (await editorDom.find(getSubtitleTarget("subtitle.languages.list")));
+    if (!list) {
+      throw new UiMismatchError("Language list missing");
+    }
+    // Live Studio may only keep a transient draft row without uploaded captions.
+    await scopedDom(list).waitFor(pendingTarget, 4_000, signal);
   } catch (error) {
     if (isAbortError(error) || signal.aborted) {
       throw error;
@@ -503,7 +716,11 @@ async function addLanguage(
   }
 
   // Wait: picker closed / editor operable before next language
-  await waitPickerClosed(editorDom, signal);
+  try {
+    await waitPickerClosed(dom, signal);
+  } catch {
+    await waitPickerClosed(editorDom, signal);
+  }
 }
 
 async function publishSubtitles(

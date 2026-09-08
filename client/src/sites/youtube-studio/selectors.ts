@@ -181,15 +181,21 @@ export const STUDIO_TARGETS = {
   },
   "page.video_details.title": {
     id: "page.video_details.title",
-    // assumption, calibrate on real device
+    // assumption, calibrate on real device (edit surface)
     ariaLabel: "Video details",
     selectorFallback: 'main[data-page="VIDEO_DETAILS"]',
   },
   "page.subtitles.title": {
     id: "page.subtitles.title",
-    // assumption, calibrate on real device
-    ariaLabel: "Subtitles",
-    selectorFallback: 'main[data-page="SUBTITLES"]',
+    // calibrated 2026-09-08 zh-Hans-CN: translations list table + h1「视频字幕」
+    // (no English aria-label "Subtitles"; main has no data-page on real Studio)
+    text: "视频字幕",
+    selectorFallback: [
+      "#ytgn-video-translations-list-table",
+      'main[data-page="SUBTITLES"]', // fixture-only helper
+    ],
+    matches: isActiveElement,
+    unique: true,
   },
   "layout.2026_v1.root": {
     id: "layout.2026_v1.root",
@@ -223,25 +229,34 @@ export const STUDIO_TARGETS = {
 
 /**
  * Subtitle editor DomTargets (FT-011).
- * ALL entries are assumptions until live subtitle-page DOM evidence arrives.
- * Do not remove "assumption, calibrate on real device" comments or claim verified.
+ * Partially calibrated 2026-09-08 (page ready + languages list table).
+ * Remaining write-path entries stay assumptions until add/picker/publish evidence.
  */
 export const SUBTITLE_TARGETS = {
   "subtitle.editor": {
     id: "subtitle.editor",
     // assumption, calibrate on real device — unique active editor surface
-    ariaLabel: "Subtitle editor",
-    selectorFallback:
-      '[data-luftballons-target="subtitle.editor"], ytcp-uploads-dialog, main[data-page="SUBTITLES"]',
+    // 2026-09-08: translations page is a table surface; keep fixture markers.
+    selectorFallback: [
+      '[data-luftballons-target="subtitle.editor"]',
+      "#ytgn-video-translations-list-table",
+      "ytcp-uploads-dialog",
+      'main[data-page="SUBTITLES"]',
+    ],
     matches: isActiveElement,
     unique: true,
   },
   "subtitle.languages.list": {
     id: "subtitle.languages.list",
-    // assumption, calibrate on real device
-    ariaLabel: "Subtitle languages",
-    selectorFallback:
-      '[data-luftballons-target="subtitle.languages.list"], ytcp-uploads-dialog #language-list, #translations-list',
+    // calibrated 2026-09-08: #ytgn-video-translations-list-table (aria-label 翻译)
+    // Fixture keeps data-luftballons-target / legacy ids.
+    ariaLabel: "翻译",
+    selectorFallback: [
+      "#ytgn-video-translations-list-table",
+      '[data-luftballons-target="subtitle.languages.list"]',
+      "ytcp-uploads-dialog #language-list",
+      "#translations-list",
+    ],
     matches: isActiveElement,
     unique: true,
   },
@@ -253,21 +268,71 @@ export const SUBTITLE_TARGETS = {
   },
   "subtitle.add_language": {
     id: "subtitle.add_language",
-    // assumption, calibrate on real device
-    ariaLabel: "Add language",
-    role: "button",
-    selectorFallback:
-      '[data-luftballons-target="subtitle.add_language"], #add-language-button, button[aria-label*="Add language"]',
-    matches: isActiveElement,
+    // calibrated 2026-09-08: black control labeled 添加语言 below translations table
+    // (not inside #ytgn-video-translations-list-table). Fixture: "Add language".
+    matches: (el) => {
+      if (!isActiveElement(el)) {
+        return false;
+      }
+      const aria = (el.getAttribute("aria-label") ?? "").trim();
+      const text = (el.textContent ?? "").replace(/\s+/g, " ").trim();
+      return (
+        aria === "Add language" ||
+        aria === "添加语言" ||
+        text === "Add language" ||
+        text === "添加语言"
+      );
+    },
+    selectorFallback: [
+      '[data-luftballons-target="subtitle.add_language"]',
+      "#add-language-button",
+      'button[aria-label*="Add language"]',
+      'button[aria-label*="添加语言"]',
+      "ytcp-button",
+      "button",
+    ],
     unique: true,
   },
   "subtitle.language.picker": {
     id: "subtitle.language.picker",
-    // assumption, calibrate on real device — picker / menu after Add language
-    ariaLabel: "Language picker",
-    selectorFallback:
-      '[data-luftballons-target="subtitle.language.picker"], #language-picker, tp-yt-paper-listbox',
-    matches: isActiveElement,
+    // Live 2026-09-08: must NOT match video sidebar [role=menuitem] drawer.
+    // Positive: fixture marker, listbox, or host whose text looks like a language catalog.
+    selectorFallback: [
+      '[data-luftballons-target="subtitle.language.picker"]',
+      "#language-picker",
+      "tp-yt-paper-listbox",
+      '[role="listbox"]',
+      "tp-yt-iron-dropdown #contentWrapper",
+      "iron-dropdown #contentWrapper",
+      '[role="menu"]',
+    ],
+    matches: (el) => {
+      if (!isActiveElement(el)) {
+        return false;
+      }
+      if (el.closest("ytcp-navigation-drawer")) {
+        return false;
+      }
+      if (el.getAttribute("data-luftballons-target") === "subtitle.language.picker") {
+        return true;
+      }
+      const text = (el.textContent ?? "").replace(/\s+/g, " ").trim();
+      // Sidebar chrome only — reject (seen in live probe).
+      if (
+        /详细信息|数据分析|编辑器|版权声明/.test(text) &&
+        !/(阿布哈兹|日语|日本語|英语|English|Japanese|Arabic|阿拉伯)/i.test(text)
+      ) {
+        return false;
+      }
+      if (el.getAttribute("role") === "listbox") {
+        return true;
+      }
+      if (el.tagName.toLowerCase() === "tp-yt-paper-listbox") {
+        return true;
+      }
+      // Language catalog signal (zh list uses …语 names).
+      return /(阿布哈兹|日语|日本語|语|English|Japanese)/i.test(text);
+    },
     unique: true,
   },
   "subtitle.language.option": {

@@ -22,7 +22,7 @@ PR / `main` commits must keep the CI workflow green before claiming automated PA
 
 | Item | Status | Evidence |
 |------|--------|----------|
-| Basic Collector | PASS (unit) / 待真机 (live) | `channel-basic-collector.test.ts` P3-T1…; handbook `docs/manual-acceptance-p3.md` |
+| Basic Collector | PASS (unit) / 待真机 (live) | `channel-basic-collector.test.ts`; handbook `docs/manual-acceptance-p3.md`. **Live residuals (2026-09-08):** no Content pagination; CJK `万`/`亿` metric parse missing (ASCII K/M/B OK). |
 | CSV | PASS | `sinks.test.ts`; P3 handbook export |
 | JSON | PASS | `sinks.test.ts` |
 | Subtitle | PASS (unit) / 待真机 (live) | `subtitle-multilang.test.ts` P4-T1…T5; `docs/manual-acceptance-p4.md` |

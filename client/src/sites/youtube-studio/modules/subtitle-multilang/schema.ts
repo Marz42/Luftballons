@@ -71,19 +71,24 @@ export interface SubtitleMultilangSummary {
 
 /**
  * Verified label→code map for rows lacking data-language-code.
- * assumption: only fixture-validated entries — unknown labels → UNPARSEABLE.
- * Do not expand from live Studio without re-verification.
+ * Live 2026-09-08: Studio may show `英语 （视频语言）` — strip parentheticals
+ * in resolveLanguageCodeFromLabel before lookup. Unknown bare labels → UNPARSEABLE.
  */
 export const SUBTITLE_LABEL_TO_CODE: Readonly<Record<string, string>> = {
   English: "en",
   英语: "en",
   日本語: "ja",
+  /** zh-Hans Studio picker / table label (2026-09-08). */
+  日语: "ja",
   한국어: "ko",
   Español: "es",
   Français: "fr",
+  /** zh-Hans Studio picker label (2026-09-08 screenshots). */
+  法语: "fr",
   Deutsch: "de",
   Português: "pt",
   "中文（简体）": "zh-Hans",
+  "中文（繁体）": "zh-Hant",
 };
 
 export type LanguageListParseKind = "EMPTY" | "READABLE" | "UNPARSEABLE";
@@ -95,20 +100,29 @@ export interface LanguageListParseResult {
   detail?: string;
 }
 
+/** Strip Studio parentheticals e.g. `英语 （视频语言）` → `英语`. */
+export function normalizeSubtitleLanguageLabel(label: string): string {
+  return label
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/\s*[（(][^）)]*[）)]\s*$/u, "")
+    .trim();
+}
+
 export function resolveLanguageCodeFromLabel(label: string): string | null {
-  const trimmed = label.replace(/\s+/g, " ").trim();
-  if (!trimmed) {
-    return null;
-  }
-  // Exact key first
-  if (SUBTITLE_LABEL_TO_CODE[trimmed]) {
-    return SUBTITLE_LABEL_TO_CODE[trimmed]!;
-  }
-  // Case-insensitive English-ish keys
-  const lower = trimmed.toLowerCase();
-  for (const [k, v] of Object.entries(SUBTITLE_LABEL_TO_CODE)) {
-    if (k.toLowerCase() === lower) {
-      return v;
+  const candidates = [label, normalizeSubtitleLanguageLabel(label)]
+    .map((s) => s.replace(/\s+/g, " ").trim())
+    .filter((s, i, arr) => s.length > 0 && arr.indexOf(s) === i);
+
+  for (const trimmed of candidates) {
+    if (SUBTITLE_LABEL_TO_CODE[trimmed]) {
+      return SUBTITLE_LABEL_TO_CODE[trimmed]!;
+    }
+    const lower = trimmed.toLowerCase();
+    for (const [k, v] of Object.entries(SUBTITLE_LABEL_TO_CODE)) {
+      if (k.toLowerCase() === lower) {
+        return v;
+      }
     }
   }
   return null;

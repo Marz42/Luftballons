@@ -41,6 +41,20 @@ When Studio shows abbreviated UI values, Luftballons parses as follows (`metrics
 
 ---
 
+## Known gaps (live residual — 2026-09-08)
+
+Recorded during re-acceptance on a Chinese-locale Studio channel (`PARTIAL` collect, `collectionId` example `4639ebcc-…`). Honest fail-closed; **not** blockers for “stop safely,” but **block COMPLETE** for affected fields until fixed.
+
+| Gap | Observed | Current behavior | Desired |
+|-----|----------|------------------|---------|
+| **Content pagination** | Channel had more videos than one rendered page; collector does not click “next page” | Captures currently rendered rows only; warning `VIDEO_SCOPE_PARTIAL` | Optional, human-triggered page-through (or explicit “current page only” UX) — still one-task / no background crawl |
+| **Latin abbreviations K/M/B** | Spec/table documents `12.3K` / `1.2M` etc. | Implemented in `metrics.ts` for ASCII `K`/`M`/`B` only | Keep; expand tests for signed / spaced variants if Studio drifts |
+| **CJK abbreviations 万 / 亿** | Dashboard/Analytics showed `54.8万` | `METRIC_UNPARSED` → `views` omitted + `VIEWS_MISSING` (never invent `0`) | Parse `万` (=×10⁴) / `亿` (=×10⁸) as `DISPLAY_ROUNDED`, same fail-closed rules |
+
+**Do not** widen selectors or invent pagination to “make COMPLETE” without live evidence and a deliberate FT.
+
+---
+
 ## P3-T1 — Basic Collection
 
 **Steps**
@@ -192,4 +206,5 @@ Phase 3 success (IMPLEMENTATION §44): success when data is correct; failure sto
 | Analytics views / subscriber delta | Scoped under `main[data-page="ANALYTICS"]` | `selectors.ts` |
 | Content list + rows | `content.videos.list` + `CONTENT_VIDEO_ROW_SELECTOR` | `selectors.ts` |
 | Channel id | Parsed from `/channel/{id}` URL only (never localStorage/API) | `collector.ts` |
-| Abbreviation math | K/M/B × multipliers; `DISPLAY_ROUNDED` via warnings | `metrics.ts` |
+| Abbreviation math | ASCII K/M/B × multipliers; `DISPLAY_ROUNDED` via warnings. **Gap:** CJK `万`/`亿` unparsed (2026-09-08). | `metrics.ts` |
+| Content pagination | **Gap:** no “next page” automation; `VIDEO_SCOPE_PARTIAL` when only current page verified (2026-09-08). | `collector.ts` |
