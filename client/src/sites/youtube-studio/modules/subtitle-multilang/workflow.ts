@@ -343,11 +343,12 @@ const CAPTIONS_EDIT_SELECTOR = [
   'ytcp-icon-button[id*="edit"]',
 ].join(", ");
 
-function findCaptionsEditInCell(captionsCell: Element): Element | null {
+export function findCaptionsEditInCell(captionsCell: Element): Element | null {
   const matches = Array.from(
     captionsCell.querySelectorAll(CAPTIONS_EDIT_SELECTOR),
   ).filter((el) => isActiveElement(el) && !isDisabledControl(el));
-  return matches.length === 1 ? matches[0]! : matches[0] ?? null;
+  // Fail-closed: never pick the first of several candidates.
+  return matches.length === 1 ? matches[0]! : null;
 }
 
 function captionsStatusText(captionsCell: Element): string {
@@ -1040,20 +1041,231 @@ type HoverMod = {
   stylePointerEvents: string;
 };
 
-async function captionsEditorEntryOpen(
-  dom: CancellableDomService,
+function restoreHoverMods(mods: HoverMod[]): void {
+  for (const m of mods) {
+    if (!m.hoveredAttr) {
+      m.el.removeAttribute("hovered");
+    }
+    if (!m.hadHoveredClass) {
+      m.el.classList.remove("hovered");
+    }
+    try {
+      const hostWithHover = m.el as HTMLElement & { hovered?: boolean };
+      if (typeof m.hoveredProp === "boolean") {
+        hostWithHover.hovered = m.hoveredProp;
+      } else {
+        delete hostWithHover.hovered;
+      }
+    } catch {
+      /* ignore */
+    }
+    m.el.style.visibility = m.styleVisibility;
+    m.el.style.opacity = m.styleOpacity;
+    m.el.style.pointerEvents = m.stylePointerEvents;
+  }
+}
+
+/**
+ * Shared captions-cell hover: wait for a unique control, act while hovered, always restore.
+ */
+async function hoverCaptionsCellAndAct(
+  captionsCell: Element,
+  lang: SubtitleLanguage,
+  signal: AbortSignal,
+  assertBinding: () => void,
+  findControl: (cell: Element) => Element | null,
+  act: (control: Element, cell: Element) => void | Promise<void>,
+  timeoutMs = 2_500,
 ): Promise<boolean> {
-  if (await dom.exists(getSubtitleTarget("subtitle.auto_translate"))) {
-    return true;
+  const mods: HoverMod[] = [];
+  const doc = captionsCell.ownerDocument;
+  const forceStyle = doc.createElement("style");
+  forceStyle.setAttribute("data-luftballons-captions-hover", lang.code);
+  captionsCell.setAttribute("data-luftballons-hover-scope", lang.code);
+  forceStyle.textContent = `
+    [data-luftballons-hover-scope="${lang.code}"] .hover-button,
+    [data-luftballons-hover-scope="${lang.code}"] #captions-add,
+    [data-luftballons-hover-scope="${lang.code}"] #cell-container #captions-add,
+    [data-luftballons-hover-scope="${lang.code}"] [aria-label="编辑"],
+    [data-luftballons-hover-scope="${lang.code}"] [aria-label="Edit"] {
+      display: inline-flex !important;
+      visibility: visible !important;
+      opacity: 1 !important;
+      pointer-events: auto !important;
+    }
+  `;
+  doc.head.append(forceStyle);
+
+  try {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() <= deadline) {
+      throwIfAborted(signal);
+      assertBinding();
+      for (const host of captionsHoverHostsFromCell(captionsCell)) {
+        if (!(host instanceof HTMLElement)) {
+          continue;
+        }
+        if (!mods.some((m) => m.el === host)) {
+          const hostWithHover = host as HTMLElement & { hovered?: boolean };
+          mods.push({
+            el: host,
+            hoveredAttr: host.hasAttribute("hovered"),
+            hadHoveredClass: host.classList.contains("hovered"),
+            hoveredProp: hostWithHover.hovered,
+            styleVisibility: host.style.visibility,
+            styleOpacity: host.style.opacity,
+            stylePointerEvents: host.style.pointerEvents,
+          });
+        }
+        host.setAttribute("hovered", "");
+        host.classList.add("hovered");
+        try {
+          (host as HTMLElement & { hovered?: boolean }).hovered = true;
+        } catch {
+          /* ignore */
+        }
+        simulatePointerHover(host);
+      }
+      const found = findControl(captionsCell);
+      if (found) {
+        await act(found, captionsCell);
+        return true;
+      }
+      await abortableDelay(50, signal);
+    }
+    return false;
+  } finally {
+    restoreHoverMods(mods);
+    captionsCell.removeAttribute("data-luftballons-hover-scope");
+    forceStyle.remove();
   }
-  if (await dom.exists(getSubtitleTarget("subtitle.manual_captions_add"))) {
-    return true;
+}
+
+/**
+ * Editor language binding: match | mismatch | unknown.
+ * Editors without lang attrs/title evidence are unknown (fail-closed).
+ */
+export function editorLanguageBinding(
+  root: Element,
+  lang: SubtitleLanguage,
+): "match" | "mismatch" | "unknown" {
+  const codes = new Set<string>();
+  const push = (raw: string | null): void => {
+    const c = (raw ?? "").trim().toLowerCase();
+    if (c) {
+      codes.add(c);
+    }
+  };
+  push(root.getAttribute("data-language-code"));
+  push(root.getAttribute("data-luftballons-subtitle-lang"));
+  for (const el of root.querySelectorAll(
+    "[data-language-code], [data-luftballons-subtitle-lang]",
+  )) {
+    push(el.getAttribute("data-language-code"));
+    push(el.getAttribute("data-luftballons-subtitle-lang"));
   }
-  const editors = querySelectorAllDeep(
+  const want = lang.code.toLowerCase();
+  if (codes.size > 0) {
+    if (codes.has(want) && [...codes].every((c) => c === want)) {
+      return "match";
+    }
+    if (codes.has(want)) {
+      return "match";
+    }
+    return "mismatch";
+  }
+
+  const aliases = labelAliasesForLanguage(lang).filter((a) => a.length >= 2);
+  const headerBits = [
+    root.getAttribute("aria-label") ?? "",
+    root.getAttribute("title") ?? "",
+    ...Array.from(
+      root.querySelectorAll(
+        "h1, h2, h3, [role='heading'], .editor-title, .language-name, .header-text, .language-text",
+      ),
+    ).map((el) => el.textContent ?? ""),
+  ];
+  const hay = headerBits.join(" ").replace(/\s+/g, " ").trim();
+  if (!hay) {
+    return "unknown";
+  }
+  const selfHit = aliases.some((a) => hay.includes(a));
+  if (selfHit) {
+    return "match";
+  }
+  // Another language's label in the chrome → mismatch.
+  for (const other of [
+    { code: "en", label: "English" },
+    { code: "ja", label: "日本語" },
+    { code: "ko", label: "한국어" },
+    { code: "fr", label: "Français" },
+    { code: "de", label: "Deutsch" },
+    { code: "es", label: "Español" },
+    { code: "ar", label: "العربية" },
+    { code: "zh-Hans", label: "中文（简体）" },
+  ] as SubtitleLanguage[]) {
+    if (other.code.toLowerCase() === want) {
+      continue;
+    }
+    const otherAliases = labelAliasesForLanguage(other).filter((a) => a.length >= 2);
+    if (otherAliases.some((a) => hay.includes(a))) {
+      return "mismatch";
+    }
+  }
+  return "unknown";
+}
+
+function listActiveCaptionsEditors(): Element[] {
+  return querySelectorAllDeep(
     document,
-    "ytve-captions-editor-options-panel, ytve-timedtext-editor, ytve-captions-editor, [data-luftballons-captions-editor]",
+    [
+      "ytve-captions-editor-options-panel",
+      "ytve-timedtext-editor",
+      "ytve-captions-editor",
+      "[data-luftballons-captions-editor]",
+    ].join(", "),
   ).filter((el) => isActiveElement(el) && !(el as HTMLElement).hidden);
-  return editors.length > 0;
+}
+
+/**
+ * True only when an open editor (or auto-translate surface) is bound to `lang`.
+ */
+async function captionsEditorEntryOpenForLang(
+  dom: CancellableDomService,
+  lang: SubtitleLanguage,
+): Promise<"match" | "mismatch" | "unknown" | "none"> {
+  const editors = listActiveCaptionsEditors();
+  if (editors.length > 0) {
+    const bindings = editors.map((el) => editorLanguageBinding(el, lang));
+    if (bindings.some((b) => b === "mismatch")) {
+      return "mismatch";
+    }
+    const matches = editors.filter(
+      (el) => editorLanguageBinding(el, lang) === "match",
+    );
+    if (matches.length === 1) {
+      return "match";
+    }
+    if (matches.length > 1) {
+      return "unknown";
+    }
+    return "unknown";
+  }
+
+  const auto = await dom.find(getSubtitleTarget("subtitle.auto_translate"));
+  const manual = await dom.find(getSubtitleTarget("subtitle.manual_captions_add"));
+  const control = auto ?? manual;
+  if (!control) {
+    return "none";
+  }
+  const host =
+    control.closest(
+      "ytve-captions-editor-options-panel, ytve-timedtext-editor, ytve-captions-editor, [data-luftballons-captions-editor], [data-luftballons-target='subtitle.editor']",
+    ) ?? control.parentElement;
+  if (!host) {
+    return "unknown";
+  }
+  return editorLanguageBinding(host, lang);
 }
 
 async function revealAndClickCaptionsAdd(
@@ -1082,7 +1294,6 @@ async function revealAndClickCaptionsAdd(
     return list;
   };
 
-  /** Hover + click while scoped styles still applied; restore in finally. */
   const tryHoverAndClick = async (): Promise<boolean> => {
     const list = await resolveList();
     const row = await findUniqueLanguageRow(list, lang);
@@ -1096,110 +1307,36 @@ async function revealAndClickCaptionsAdd(
       throw new UiMismatchError(`Unique captions cell missing for ${lang.code}`);
     }
 
-    const mods: HoverMod[] = [];
-    const forceStyle = row.ownerDocument.createElement("style");
-    forceStyle.setAttribute("data-luftballons-captions-hover", lang.code);
-    captionsCell.setAttribute("data-luftballons-hover-scope", lang.code);
-    forceStyle.textContent = `
-      [data-luftballons-hover-scope="${lang.code}"] .hover-button,
-      [data-luftballons-hover-scope="${lang.code}"] #captions-add,
-      [data-luftballons-hover-scope="${lang.code}"] #cell-container #captions-add {
-        display: inline-flex !important;
-        visibility: visible !important;
-        opacity: 1 !important;
-        pointer-events: auto !important;
-      }
-    `;
-    row.ownerDocument.head.append(forceStyle);
-
-    try {
-      const deadline = Date.now() + 2_500;
-      let found: Element | null = null;
-      while (Date.now() <= deadline) {
-        throwIfAborted(signal);
+    return hoverCaptionsCellAndAct(
+      captionsCell,
+      lang,
+      signal,
+      assertBinding,
+      findUniqueCaptionsAddInCell,
+      async (_found) => {
         assertBinding();
-        for (const host of captionsHoverHostsFromCell(captionsCell)) {
-          if (!(host instanceof HTMLElement)) {
-            continue;
-          }
-          if (!mods.some((m) => m.el === host)) {
-            const hostWithHover = host as HTMLElement & { hovered?: boolean };
-            mods.push({
-              el: host,
-              hoveredAttr: host.hasAttribute("hovered"),
-              hadHoveredClass: host.classList.contains("hovered"),
-              hoveredProp: hostWithHover.hovered,
-              styleVisibility: host.style.visibility,
-              styleOpacity: host.style.opacity,
-              stylePointerEvents: host.style.pointerEvents,
-            });
-          }
-          host.setAttribute("hovered", "");
-          host.classList.add("hovered");
-          try {
-            (host as HTMLElement & { hovered?: boolean }).hovered = true;
-          } catch {
-            /* ignore */
-          }
-          simulatePointerHover(host);
+        const list2 = await resolveList();
+        const row2 = await findUniqueLanguageRow(list2, lang);
+        const cell2 = row2 ? findCaptionsCell(row2) : null;
+        const btn2 = cell2 ? findUniqueCaptionsAddInCell(cell2) : null;
+        if (!btn2 || !btn2.isConnected) {
+          throw new UiMismatchError(
+            `Captions-add for ${lang.code} not uniquely active before click`,
+          );
         }
-        found = findUniqueCaptionsAddInCell(captionsCell);
-        if (found) {
-          break;
+        if (btn2 instanceof HTMLElement) {
+          btn2.click();
+        } else {
+          btn2.dispatchEvent(
+            new MouseEvent("click", {
+              bubbles: true,
+              cancelable: true,
+              composed: true,
+            }),
+          );
         }
-        await abortableDelay(50, signal);
-      }
-      if (!found) {
-        return false;
-      }
-
-      assertBinding();
-      const list2 = await resolveList();
-      const row2 = await findUniqueLanguageRow(list2, lang);
-      const cell2 = row2 ? findCaptionsCell(row2) : null;
-      const btn2 = cell2 ? findUniqueCaptionsAddInCell(cell2) : null;
-      if (!btn2 || !btn2.isConnected) {
-        throw new UiMismatchError(
-          `Captions-add for ${lang.code} not uniquely active before click`,
-        );
-      }
-      if (btn2 instanceof HTMLElement) {
-        btn2.click();
-      } else {
-        btn2.dispatchEvent(
-          new MouseEvent("click", {
-            bubbles: true,
-            cancelable: true,
-            composed: true,
-          }),
-        );
-      }
-      return true;
-    } finally {
-      for (const m of mods) {
-        if (!m.hoveredAttr) {
-          m.el.removeAttribute("hovered");
-        }
-        if (!m.hadHoveredClass) {
-          m.el.classList.remove("hovered");
-        }
-        try {
-          const hostWithHover = m.el as HTMLElement & { hovered?: boolean };
-          if (typeof m.hoveredProp === "boolean") {
-            hostWithHover.hovered = m.hoveredProp;
-          } else {
-            delete hostWithHover.hovered;
-          }
-        } catch {
-          /* ignore */
-        }
-        m.el.style.visibility = m.styleVisibility;
-        m.el.style.opacity = m.styleOpacity;
-        m.el.style.pointerEvents = m.stylePointerEvents;
-      }
-      captionsCell.removeAttribute("data-luftballons-hover-scope");
-      forceStyle.remove();
-    }
+      },
+    );
   };
 
   if (await tryHoverAndClick()) {
@@ -1227,7 +1364,15 @@ async function revealAndClickCaptionsAdd(
           return;
         }
         if (await dom.exists(auto)) {
-          return;
+          const open = await captionsEditorEntryOpenForLang(dom, lang);
+          if (open === "match") {
+            return;
+          }
+          if (open === "mismatch" || open === "unknown") {
+            throw new UiMismatchError(
+              `Captions editor language not bound to ${lang.code} after language-name open`,
+            );
+          }
         }
         await abortableDelay(50, signal);
       }
@@ -1242,7 +1387,7 @@ async function revealAndClickCaptionsAdd(
         description: `Hover the captions cell (or open the editor) for ${lang.label} (${lang.code}), then Continue.`,
         consequences: [
           "Luftballons could not stamp #captions-add via synthetic hover",
-          "Continue after the captions editor is open OR #captions-add is visible",
+          `Continue only after the ${lang.label} captions editor is open OR #captions-add is visible`,
         ],
         reversible: false,
       },
@@ -1252,9 +1397,14 @@ async function revealAndClickCaptionsAdd(
       throw new UiMismatchError(`Human declined hover assist for ${lang.code}`);
     }
     assertBinding();
-    // User may have opened the editor already — do not force another #captions-add click.
-    if (await captionsEditorEntryOpen(dom)) {
+    const open = await captionsEditorEntryOpenForLang(dom, lang);
+    if (open === "match") {
       return;
+    }
+    if (open === "mismatch" || open === "unknown") {
+      throw new UiMismatchError(
+        `Open captions editor is not confirmed for ${lang.code}; refusing to continue`,
+      );
     }
     const listAfter = await resolveList();
     const rowAfter = await findUniqueLanguageRow(listAfter, lang);
@@ -1275,7 +1425,7 @@ async function revealAndClickCaptionsAdd(
 }
 
 /**
- * Open an existing draft/published-edit track via captions-cell edit control.
+ * Open an existing draft track via captions-cell edit control (shared hover helper).
  */
 async function revealAndClickCaptionsEdit(
   dom: CancellableDomService,
@@ -1297,26 +1447,26 @@ async function revealAndClickCaptionsEdit(
   if (!captionsCell) {
     return false;
   }
-  // Reveal hover chrome so edit appears.
-  for (const host of captionsHoverHostsFromCell(captionsCell)) {
-    if (host instanceof HTMLElement) {
-      host.setAttribute("hovered", "");
-      host.classList.add("hovered");
-      simulatePointerHover(host);
-    }
-  }
-  const edit = findCaptionsEditInCell(captionsCell);
-  if (!edit) {
-    return false;
-  }
-  if (edit instanceof HTMLElement) {
-    edit.click();
-  } else {
-    edit.dispatchEvent(
-      new MouseEvent("click", { bubbles: true, cancelable: true, composed: true }),
-    );
-  }
-  return true;
+  return hoverCaptionsCellAndAct(
+    captionsCell,
+    lang,
+    signal,
+    assertBinding,
+    findCaptionsEditInCell,
+    async (edit) => {
+      if (edit instanceof HTMLElement) {
+        edit.click();
+      } else {
+        edit.dispatchEvent(
+          new MouseEvent("click", {
+            bubbles: true,
+            cancelable: true,
+            composed: true,
+          }),
+        );
+      }
+    },
+  );
 }
 
 async function clickManualCaptionsAdd(
@@ -1336,47 +1486,56 @@ async function clickManualCaptionsAdd(
   await dom.click(target);
 }
 
+/**
+ * Unique captions editor bound to `lang`. No lang evidence → not accepted.
+ */
 function activeCaptionsEditorRoot(lang: SubtitleLanguage): Element | null {
-  const doc = document;
-  const scoped = querySelectorAllDeep(
-    doc,
-    [
-      `[data-luftballons-captions-editor][data-language-code="${lang.code}"]`,
-      `[data-luftballons-captions-editor][data-luftballons-subtitle-lang="${lang.code}"]`,
-      "ytve-captions-editor",
-      "ytve-timedtext-editor",
-      "ytve-captions-editor-options-panel",
-      "[data-luftballons-captions-editor]",
-    ].join(", "),
-  ).filter((el) => isActiveElement(el) && !(el as HTMLElement).hidden);
-
-  const forLang = scoped.filter((el) => {
-    const code =
-      el.getAttribute("data-language-code") ??
-      el.getAttribute("data-luftballons-subtitle-lang");
-    return !code || code.toLowerCase() === lang.code.toLowerCase();
-  });
-  if (forLang.length === 1) {
-    return forLang[0]!;
-  }
-  if (forLang.length > 1) {
-    const explicit = forLang.filter(
-      (el) =>
-        (el.getAttribute("data-language-code") ?? "").toLowerCase() ===
-          lang.code.toLowerCase() ||
-        (el.getAttribute("data-luftballons-subtitle-lang") ?? "").toLowerCase() ===
-          lang.code.toLowerCase(),
-    );
-    if (explicit.length === 1) {
-      return explicit[0]!;
-    }
-    const withContent = forLang.filter((el) => captionsContentReadyInRoot(el));
-    if (withContent.length === 1) {
-      return withContent[0]!;
-    }
-    return null;
+  const scoped = listActiveCaptionsEditors();
+  const matches = scoped.filter(
+    (el) => editorLanguageBinding(el, lang) === "match",
+  );
+  if (matches.length === 1) {
+    return matches[0]!;
   }
   return null;
+}
+
+/**
+ * DOM scoped to the language-bound editor (or its parent surface that holds actions).
+ * If no editor chrome yet (post-add options), allow page-level actions only when
+ * no open editor is mismatched/unknown for `lang`.
+ */
+function actionDomForLanguage(
+  dom: CancellableDomService,
+  lang: SubtitleLanguage,
+): CancellableDomService {
+  const root = activeCaptionsEditorRoot(lang);
+  if (root) {
+    const hasActions =
+      root.querySelector(
+        '[data-luftballons-target="subtitle.auto_translate"], #choose-auto-translate, [data-luftballons-target="subtitle.publish"], button[aria-label="发布"], button[aria-label="Publish"]',
+      ) !== null;
+    if (hasActions) {
+      return scopedDom(root);
+    }
+    const parent = root.parentElement;
+    if (parent) {
+      return scopedDom(parent);
+    }
+    return scopedDom(root);
+  }
+
+  const open = listActiveCaptionsEditors();
+  for (const el of open) {
+    const binding = editorLanguageBinding(el, lang);
+    if (binding !== "match") {
+      throw new UiMismatchError(
+        `Captions editor not uniquely bound to ${lang.code}; refusing auto-translate/publish`,
+      );
+    }
+  }
+  // No captions editor panel yet (list-row add → options) — page-level controls OK.
+  return dom;
 }
 
 function captionsContentReadyInRoot(root: Element): boolean {
@@ -1411,26 +1570,55 @@ function captionsContentReadyInRoot(root: Element): boolean {
         ? el.value
         : (el.textContent ?? "");
     const text = value.replace(/\s+/g, " ").trim();
+    // Cue body may legitimately contain words like "Loading" — do not treat as chrome.
     if (
       text.length >= 2 &&
-      !/字幕空白|无法发布空白|自动翻译|选择方式|添加语言|正在翻译|Translating|Loading/i.test(
-        text,
-      )
+      !/字幕空白|无法发布空白|自动翻译|选择方式|添加语言/i.test(text)
     ) {
       return true;
     }
   }
-  // Do not treat whole-editor chrome text length as READY (UI copy can exceed 80 chars).
   return false;
 }
 
+/**
+ * Busy only from explicit status / loading chrome — never full editor textContent
+ * (cue bodies can say "We are processing your order").
+ */
 function editorRootLooksBusy(root: Element): boolean {
   if (root.getAttribute("aria-busy") === "true") {
     return true;
   }
-  return /正在翻译|Translating|Loading|处理中|Processing/i.test(
-    (root.textContent ?? "").replace(/\s+/g, " "),
+  const statusNodes = querySelectorAllDeep(
+    root,
+    [
+      '[aria-busy="true"]',
+      '[role="status"]',
+      '[role="progressbar"]',
+      '[data-luftballons-translate-status]',
+      ".loading-spinner",
+      '[class*="spinner"]',
+      '[class*="progress"]',
+      '[class*="Spinner"]',
+      '[class*="Progress"]',
+    ].join(", "),
   );
+  for (const el of statusNodes) {
+    if (!isActiveElement(el) || (el as HTMLElement).hidden) {
+      continue;
+    }
+    if (el.getAttribute("aria-busy") === "true") {
+      return true;
+    }
+    const t = (el.textContent ?? "").replace(/\s+/g, " ").trim();
+    if (
+      t.length > 0 &&
+      /正在翻译|Translating|Loading|处理中|Processing/i.test(t)
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function hasLanguageScopedReadyMarker(lang: SubtitleLanguage): boolean {
@@ -1571,24 +1759,26 @@ async function autoTranslateAndPublish(
   throwIfAborted(signal);
   assertBinding();
 
+  const actionDom = actionDomForLanguage(dom, lang);
+
   if (!opts?.skipAutoTranslateClick) {
     const auto = getSubtitleTarget("subtitle.auto_translate");
     try {
-      await dom.waitFor(auto, 5_000, signal);
+      await actionDom.waitFor(auto, 5_000, signal);
     } catch (error) {
       if (isAbortError(error) || signal.aborted) {
         throw error;
       }
       throw new WaitTimeoutError("自动翻译 control did not appear");
     }
-    await dom.click(auto);
+    await actionDom.click(auto);
     throwIfAborted(signal);
     assertBinding();
   }
 
   const publish = getSubtitleTarget("subtitle.publish");
   try {
-    await dom.waitFor(publish, 8_000, signal);
+    await actionDom.waitFor(publish, 8_000, signal);
   } catch (error) {
     if (isAbortError(error) || signal.aborted) {
       throw error;
@@ -1601,7 +1791,7 @@ async function autoTranslateAndPublish(
   await waitUntilCaptionsReady(dom, lang, signal, CAPTIONS_READY_TIMEOUT_MS, humanGate);
   throwIfAborted(signal);
   assertBinding();
-  if (!(await dom.exists(publish))) {
+  if (!(await actionDom.exists(publish))) {
     throw new WaitTimeoutError(
       "Publish (发布) disappeared while waiting for captions READY",
     );
@@ -1615,7 +1805,7 @@ async function autoTranslateAndPublish(
       if (await blankPublishErrorVisible(dom)) {
         return "blank";
       }
-      const publishErr = await dom.find({
+      const publishErr = await actionDom.find({
         id: "subtitle.publish.error",
         selectorFallback: [
           '[data-luftballons-target="subtitle.publish"][data-publish-error="true"]',
@@ -1640,7 +1830,7 @@ async function autoTranslateAndPublish(
   };
 
   deps.onPublishAttempt?.();
-  await dom.click(publish);
+  await actionDom.click(publish);
   let outcome = await observeAfterClick();
   if (outcome === "error") {
     throw new UiMismatchError("Publish control reported an error after click");
@@ -1655,13 +1845,13 @@ async function autoTranslateAndPublish(
     );
     throwIfAborted(signal);
     assertBinding();
-    if (!(await dom.exists(publish))) {
+    if (!(await actionDom.exists(publish))) {
       throw new UiMismatchError(
         "Studio rejected publish: blank captions (无法发布空白字幕)",
       );
     }
     deps.onPublishAttempt?.();
-    await dom.click(publish);
+    await actionDom.click(publish);
     outcome = await observeAfterClick();
     if (outcome === "blank" || outcome === "error") {
       throw new UiMismatchError(

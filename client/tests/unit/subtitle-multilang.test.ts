@@ -1190,7 +1190,11 @@ describe("youtube.subtitle.multilang (FT-011 / P4-T1…T5)", () => {
 
   it("P1-live: zero-harness TRANSLATING + publish enabled is not READY", async () => {
     const editor = document.createElement("ytve-captions-editor");
-    editor.textContent = "正在翻译字幕，请稍候";
+    editor.setAttribute("data-language-code", "de");
+    const status = document.createElement("div");
+    status.setAttribute("role", "status");
+    status.textContent = "正在翻译字幕，请稍候";
+    editor.append(status);
     const publish = document.createElement("button");
     publish.setAttribute("aria-label", "发布");
     publish.setAttribute("role", "button");
@@ -1209,6 +1213,7 @@ describe("youtube.subtitle.multilang (FT-011 / P4-T1…T5)", () => {
 
   it("P1-live: zero-harness cue-text READY without data-luftballons captions attrs", async () => {
     const editor = document.createElement("ytve-timedtext-editor");
+    editor.setAttribute("data-language-code", "de");
     const cue = document.createElement("div");
     cue.className = "cue-text";
     cue.textContent = "Hallo Welt aus echten Cues";
@@ -1229,8 +1234,32 @@ describe("youtube.subtitle.multilang (FT-011 / P4-T1…T5)", () => {
     expect(phase).toBe("READY");
   });
 
+  it("P1-live: cue body with Processing/Loading words is READY not busy", async () => {
+    const editor = document.createElement("ytve-timedtext-editor");
+    editor.setAttribute("data-language-code", "en");
+    const cue = document.createElement("div");
+    cue.className = "cue-text";
+    cue.textContent = "We are processing your order. Loading the truck took an hour.";
+    editor.append(cue);
+    const publish = document.createElement("button");
+    publish.setAttribute("aria-label", "Publish");
+    publish.setAttribute("role", "button");
+    document.body.replaceChildren(editor, publish);
+
+    const { createDomService } = await import("../../src/services/dom-service.js");
+    const { classifyTranslatePhase } = await import(
+      "../../src/sites/youtube-studio/modules/subtitle-multilang/workflow.js"
+    );
+    const phase = await classifyTranslatePhase(createDomService(), {
+      code: "en",
+      label: "English",
+    });
+    expect(phase).toBe("READY");
+  });
+
   it("P1-live: zero-harness publish-enabled alone stays UNKNOWN (not READY)", async () => {
     const editor = document.createElement("ytve-captions-editor-options-panel");
+    editor.setAttribute("data-language-code", "ja");
     editor.textContent = "自动翻译";
     const publish = document.createElement("button");
     publish.setAttribute("aria-label", "发布");
@@ -1250,7 +1279,12 @@ describe("youtube.subtitle.multilang (FT-011 / P4-T1…T5)", () => {
 
   it("P1-live: waitUntilCaptionsReady refuses publish-stable shortcut (zero harness)", async () => {
     const editor = document.createElement("ytve-captions-editor");
-    editor.textContent = "正在翻译";
+    editor.setAttribute("data-language-code", "de");
+    editor.setAttribute("aria-busy", "true");
+    const status = document.createElement("div");
+    status.setAttribute("role", "status");
+    status.textContent = "正在翻译";
+    editor.append(status);
     const publish = document.createElement("button");
     publish.setAttribute("aria-label", "发布");
     publish.setAttribute("role", "button");
@@ -1270,6 +1304,70 @@ describe("youtube.subtitle.multilang (FT-011 / P4-T1…T5)", () => {
       ),
     ).rejects.toThrow(/Captions not READY/);
   }, 8_000);
+
+  it("P1: two edit buttons → findCaptionsEdit returns null (no first-candidate)", async () => {
+    const cell = document.createElement("div");
+    cell.className = "tablecell-captions";
+    const e1 = document.createElement("button");
+    e1.setAttribute("aria-label", "编辑");
+    const e2 = document.createElement("button");
+    e2.setAttribute("aria-label", "Edit");
+    let clicks = 0;
+    e1.addEventListener("click", () => {
+      clicks += 1;
+    });
+    e2.addEventListener("click", () => {
+      clicks += 1;
+    });
+    cell.append(e1, e2);
+    document.body.replaceChildren(cell);
+
+    const { findCaptionsEditInCell } = await import(
+      "../../src/sites/youtube-studio/modules/subtitle-multilang/workflow.js"
+    );
+    expect(findCaptionsEditInCell(cell)).toBeNull();
+    expect(clicks).toBe(0);
+  });
+
+  it("P1: wrong-language editor open → auto/publish clicks stay zero", async () => {
+    fixture = mountStudioFixture({
+      page: "VIDEO_DETAILS",
+      subtitles: {
+        existingLanguages: [],
+        pickerLanguages: [{ code: "fr", label: "法语" }],
+      },
+    });
+    const wrong = document.createElement("div");
+    wrong.setAttribute("data-luftballons-captions-editor", "true");
+    wrong.setAttribute("data-language-code", "ja");
+    wrong.setAttribute("aria-label", "日语");
+    wrong.textContent = "Japanese editor open";
+    document.body.append(wrong);
+
+    const { editorLanguageBinding } = await import(
+      "../../src/sites/youtube-studio/modules/subtitle-multilang/workflow.js"
+    );
+    expect(
+      editorLanguageBinding(wrong, { code: "fr", label: "Français" }),
+    ).toBe("mismatch");
+
+    const runner = makeRunner(
+      createFixtureSubtitleModule(fixture, {
+        initialLanguages: [{ code: "fr", label: "Français" }],
+      }),
+      createAutoApproveGate(),
+    );
+    const id = await runner.start("youtube.subtitle.multilang");
+    await vi.waitFor(() => expect(runner.getState(id)).toBe("FAILED"), {
+      timeout: 20_000,
+    });
+    expect(fixture.clickCounts.publish).toBe(0);
+    const detail =
+      runner.getSnapshot(id).result?.warnings?.map((w) => w.message).join(" ") ??
+      "";
+    expect(detail).toMatch(/not uniquely bound|not confirmed for fr/i);
+  }, 25_000);
+
 
   it("P1-live: empty captions cell without add → UNPARSEABLE", async () => {
     const list = document.createElement("ytgn-video-translations-list");

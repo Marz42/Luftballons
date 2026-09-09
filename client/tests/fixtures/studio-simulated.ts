@@ -465,6 +465,7 @@ function appendSubtitlesBody(
         captionsReady.setAttribute("data-language-code", code);
         captionsReady.setAttribute("data-luftballons-subtitle-lang", code);
       }
+      captionsReady.removeAttribute("aria-busy");
       // Real cue-shaped content (also works if ready attr were absent).
       captionsReady.replaceChildren();
       const cue = document.createElement("div");
@@ -476,15 +477,21 @@ function appendSubtitlesBody(
       return;
     }
     captionsReady.removeAttribute("data-luftballons-captions-ready");
-    captionsReady.removeAttribute("data-language-code");
-    captionsReady.removeAttribute("data-luftballons-subtitle-lang");
     captionsReady.replaceChildren();
     if (!code) {
+      captionsReady.removeAttribute("data-language-code");
+      captionsReady.removeAttribute("data-luftballons-subtitle-lang");
+      captionsReady.removeAttribute("aria-busy");
       // Editor closed / list restored.
       captionsReady.hidden = true;
       return;
     }
+    captionsReady.setAttribute("data-language-code", code);
+    captionsReady.setAttribute("data-luftballons-subtitle-lang", code);
+    captionsReady.setAttribute("aria-busy", "true");
     const busy = document.createElement("div");
+    busy.setAttribute("role", "status");
+    busy.setAttribute("data-luftballons-translate-status", "true");
     busy.textContent = "正在翻译…";
     captionsReady.append(busy);
     // Keep visible so classifyTranslatePhase can see TRANSLATING (live-shaped).
