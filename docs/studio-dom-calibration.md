@@ -123,10 +123,9 @@ detect this family and either adapt selectors or fail-closed as unsupported.
    - Control: `ytcp-icon-button#captions-add.hover-button[aria-label="添加"][role="button"]`
      inside `ytgn-video-translation-hover-cell` (appears on hover; may be absent in idle DOM)
 4. Choose **自动翻译** (`#choose-auto-translate`) — URL still `/translations`
-5. Wait until **发布** enabled; live Layout A has no cue DOM → treat **发布**
-   stable (~2s, no blank toast) as READY, then click **发布** → verify captions
-   published (`已发布` text **or** hover edit/delete chrome). Fixture tests still
-   require explicit captions-ready markers.
+5. Wait until captions **READY** via cue/content evidence (same state machine as
+   fixtures — **not** “发布 enabled for 2s”). If still translating / unknown,
+   wait or Human Gate confirm; refuse publish without READY.
    (live: 发布 may enable before translation finishes → 「无法发布空白字幕」)
 
 Layout A subtitle pack is **complete** for selector design (content hub + list + picker
@@ -143,28 +142,31 @@ Operator ran `youtube.subtitle.multilang` end-to-end on `/edit`|/translations
 | Français (`fr`), Español (`es`), العربية (`ar`), 한국어 (`ko`), 中文（简体） (`zh-Hans`) | **SUCCESS** |
 
 Calibration fixes validated live: captions-vs-metadata parse, hover `#captions-add`,
-publish-stable READY, and post-publish verify when hover hides「已发布」behind
-edit/delete. See `docs/manual-acceptance-p4.md` sign-off. Layout B/C and full §50
-5×3 matrix remain open.
+and post-publish verify. **2026-09-09 hardening:** publish-stable READY removed;
+fixture and live share one READY FSM; edit/delete icons are not sole published proof
+(clear hover + status text). See `docs/manual-acceptance-p4.md` sign-off. Layout B/C
+and full §50 5×3 matrix remain open.
 
 #### Captions vs metadata state (WRITE diff / publish verify)
 
 | Captions cell `#status-info` | Metadata cell | Diff action |
 | --- | --- | --- |
-| `–` / empty | anything (incl. `已发布`) | **Resume** captions entry — never skip |
-| `已发布` (+ optional date) | anything | **Skip** (captions published) |
-| Hover shows **编辑/删除** (status text hidden) | anything | **Skip** — published track chrome (not `#captions-add`) |
-| other non-dash text | anything | **Resume draft** (no blind re-translate if cues READY) |
-| unreadable / missing cell | — | treat as **CAPTIONS_MISSING** (resume), not whole-list fail |
+| `–` / `#captions-add` | anything (incl. `已发布`) | **Resume** captions entry — never skip |
+| `已发布` (+ optional date) / leading `Published` | anything | **Skip** (captions published) |
+| `草稿` / Draft / processing / error tokens | anything | **Resume draft** (edit entry; wait if loading) |
+| Hover edit/delete only (no status) | anything | **UNPARSEABLE** — not skip |
+| missing cell / empty unrecognized status | — | **UNPARSEABLE** stop (fail-closed) |
 
-Publish success requires the **captions** cell to indicate published (「已发布」
-and/or edit/delete hover chrome — **not** metadata-only「已发布」), after editor
-chrome settles. Auto-translate must reach **READY** before 发布; timeout refuses
-publish rather than clicking blank tracks.
+Publish success requires **all** of: unique target row + captions published status
+text + captions editor exited + list operable + video binding. Edit/delete hover
+chrome is not sole published evidence. Auto-translate must reach **READY** (cue or
+ready marker — never publish-button stability alone); timeout → Human Gate confirm
+or refuse publish.
 
 **Automation note (A):** hover `#captions-add` is stamped into DOM on cell
-hover (`ps-dom-if`); scoped hover + unique list→row→captions→add; temporary
-hover styles restored; Human Gate hover assist if stamp fails.
+hover (`ps-dom-if`); scoped hover + unique list→row→captions→add; restore
+attribute/class/**property** `.hovered` + styles; Human Gate hover assist branches
+on editor-already-open vs add-visible.
 
 #### Naming note
 

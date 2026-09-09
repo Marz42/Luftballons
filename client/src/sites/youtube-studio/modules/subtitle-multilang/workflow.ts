@@ -241,13 +241,42 @@ function normalizeStatusText(raw: string): string {
 
 function isDashStatus(text: string): boolean {
   const t = normalizeStatusText(text);
-  return t === "" || t === "–" || t === "-" || t === "—" || t === "－";
+  // Explicit Studio dash glyphs only — empty string is not "missing captions".
+  return t === "–" || t === "-" || t === "—" || t === "－";
 }
 
+/** Draft / processing / error — wins over published heuristics. */
+function isDraftOrBusyStatus(text: string): boolean {
+  const t = normalizeStatusText(text);
+  if (!t) {
+    return false;
+  }
+  return /草稿|Draft|处理中|Processing|翻译中|正在翻译|Translating|Loading|失败|Error|无法发布|空白字幕/i.test(
+    t,
+  );
+}
+
+/**
+ * Bounded published status (captions #status-info). Avoids substring traps
+ * like Unpublished / Not published matching /Published/i.
+ */
 function isPublishedStatus(text: string): boolean {
   const t = normalizeStatusText(text);
-  // Live: 「已发布」or「已发布 2026年9月8日」in captions #status-info.
-  return /已发布|Published/i.test(t) && !/无法发布|空白/.test(t);
+  if (!t) {
+    return false;
+  }
+  if (/未发布|Not\s+published|Unpublished|无法发布|空白/i.test(t)) {
+    return false;
+  }
+  // zh-Hans: 「已发布」or「已发布 2026年9月8日」
+  if (/^已发布(\b|\s|$|[\d年])/.test(t)) {
+    return true;
+  }
+  // en: leading Published token only
+  if (/^Published(\b|\s|$)/i.test(t)) {
+    return true;
+  }
+  return false;
 }
 
 /**
@@ -293,46 +322,32 @@ function clearCaptionsCellHover(captionsCell: Element): void {
   }
 }
 
-/** Published captions track: status text, or hover edit/delete (not empty #captions-add). */
+/**
+ * Published captions track from status text only.
+ * Edit/delete hover chrome is never sole evidence (draft rows may show edit).
+ */
 function captionsCellIndicatesPublished(captionsCell: Element): boolean {
   const status = captionsStatusText(captionsCell);
-  if (isPublishedStatus(status)) {
-    return true;
+  if (isDraftOrBusyStatus(status)) {
+    return false;
   }
-  const cellText = normalizeStatusText(captionsCell.textContent ?? "");
-  if (isPublishedStatus(cellText)) {
-    return true;
-  }
+  return isPublishedStatus(status);
+}
 
-  const add = captionsCell.querySelector("#captions-add");
-  const edit = captionsCell.querySelector(
-    [
-      '[aria-label="编辑"]',
-      '[aria-label="Edit"]',
-      '[aria-label*="编辑"]',
-      '[aria-label*="Edit"]',
-      "#edit-button",
-      'ytcp-icon-button[id*="edit"]',
-    ].join(", "),
-  );
-  const del = captionsCell.querySelector(
-    [
-      '[aria-label="删除"]',
-      '[aria-label="Delete"]',
-      '[aria-label*="删除"]',
-      '[aria-label*="Delete"]',
-      "#delete-button",
-      'ytcp-icon-button[id*="delete"]',
-    ].join(", "),
-  );
-  // Hover chrome for an existing captions track (screenshot 2026-09-08: pencil + trash).
-  if ((edit || del) && !add) {
-    return true;
-  }
-  if (edit && del) {
-    return true;
-  }
-  return false;
+const CAPTIONS_EDIT_SELECTOR = [
+  '[aria-label="编辑"]',
+  '[aria-label="Edit"]',
+  'button[aria-label*="编辑"]',
+  'button[aria-label*="Edit"]',
+  "#edit-button",
+  'ytcp-icon-button[id*="edit"]',
+].join(", ");
+
+function findCaptionsEditInCell(captionsCell: Element): Element | null {
+  const matches = Array.from(
+    captionsCell.querySelectorAll(CAPTIONS_EDIT_SELECTOR),
+  ).filter((el) => isActiveElement(el) && !isDisabledControl(el));
+  return matches.length === 1 ? matches[0]! : matches[0] ?? null;
 }
 
 function captionsStatusText(captionsCell: Element): string {
@@ -351,6 +366,7 @@ function captionsStatusText(captionsCell: Element): string {
 
 /**
  * Captions-scoped row state (Layout A). Never uses metadata cell「已发布」.
+ * Unknown / missing cell → UNPARSEABLE (fail-closed), not CAPTIONS_MISSING.
  */
 function rowStateFromElement(el: Element): SubtitleRowState {
   const attr = el.getAttribute("data-subtitle-state");
@@ -366,24 +382,26 @@ function rowStateFromElement(el: Element): SubtitleRowState {
 
   const captionsCell = findCaptionsCell(el);
   if (!captionsCell) {
-    return "CAPTIONS_MISSING";
+    return "UNPARSEABLE";
   }
 
   clearCaptionsCellHover(captionsCell);
 
+  const status = captionsStatusText(captionsCell);
+  if (isDraftOrBusyStatus(status)) {
+    return "CAPTIONS_DRAFT";
+  }
   if (captionsCellIndicatesPublished(captionsCell)) {
     return "CAPTIONS_PUBLISHED";
   }
 
-  const status = captionsStatusText(captionsCell);
-  if (isDashStatus(status)) {
+  const add = captionsCell.querySelector("#captions-add");
+  if (isDashStatus(status) || add) {
     return "CAPTIONS_MISSING";
   }
-  // Non-dash, non-published text in captions status → draft / in-progress.
-  if (status.length > 0) {
-    return "CAPTIONS_DRAFT";
-  }
-  return "CAPTIONS_MISSING";
+
+  // Empty or unrecognized status without add entry — do not invent MISSING/DRAFT.
+  return "UNPARSEABLE";
 }
 
 function collectRowElements(list: Element): Element[] {
@@ -600,13 +618,41 @@ async function findUniqueLanguageRow(
 function listSurfaceActive(domRoot: ParentNode = document): boolean {
   const editors = querySelectorAllDeep(
     domRoot instanceof Document ? domRoot : (domRoot as Element).ownerDocument ?? document,
-    "ytve-captions-editor-options-panel, ytve-timedtext-editor, [data-luftballons-captions-editor]",
+    "ytve-captions-editor-options-panel, ytve-timedtext-editor, ytve-captions-editor, [data-luftballons-captions-editor]",
   ).filter((el) => isActiveElement(el) && !(el as HTMLElement).hidden);
-  // List is "restored" when no active captions editor chrome, or list is still visible.
+  // List is "restored" when no active captions editor chrome.
   return editors.length === 0;
 }
 
-async function waitForPublishedRow(
+/**
+ * Every success path must satisfy: binding + unique row + captions published
+ * + editor exited + list operable. No soft bypasses.
+ */
+async function publishVerifyOk(
+  dom: CancellableDomService,
+  lang: SubtitleLanguage,
+  assertBinding: () => void,
+): Promise<boolean> {
+  assertBinding();
+  const list = await dom.find(getSubtitleTarget("subtitle.languages.list"));
+  if (!list || !isActiveElement(list)) {
+    return false;
+  }
+  if (!listSurfaceActive()) {
+    return false;
+  }
+  const row = await findUniqueLanguageRow(list, lang);
+  if (!row) {
+    return false;
+  }
+  const cell = findCaptionsCell(row);
+  if (cell) {
+    clearCaptionsCellHover(cell);
+  }
+  return isCaptionsPublishedState(rowStateFromElement(row));
+}
+
+export async function waitForPublishedRow(
   dom: CancellableDomService,
   lang: SubtitleLanguage,
   signal: AbortSignal,
@@ -618,44 +664,16 @@ async function waitForPublishedRow(
   let sawList = false;
   while (Date.now() <= deadline) {
     throwIfAborted(signal);
-    assertBinding();
     const list = await dom.find(getSubtitleTarget("subtitle.languages.list"));
     if (!list || !isActiveElement(list)) {
       if (sawList) {
-        // List was readable then vanished — cannot verify captions published.
         return false;
       }
       await abortableDelay(100, signal);
       continue;
     }
     sawList = true;
-    const row = await findUniqueLanguageRow(list, lang);
-    if (row) {
-      const cell = findCaptionsCell(row);
-      if (cell) {
-        clearCaptionsCellHover(cell);
-      }
-    }
-    if (row && isCaptionsPublishedState(rowStateFromElement(row))) {
-      if (
-        listSurfaceActive() ||
-        !(await dom.exists(getSubtitleTarget("subtitle.auto_translate")))
-      ) {
-        return true;
-      }
-      await abortableDelay(80, signal);
-      if (isCaptionsPublishedState(rowStateFromElement(row))) {
-        return true;
-      }
-    }
-    const rows = await readLanguageRows(dom);
-    if (
-      rows?.some(
-        (r) =>
-          r.code.toLowerCase() === lang.code.toLowerCase() &&
-          isCaptionsPublishedState(r.state),
-      )
-    ) {
+    if (await publishVerifyOk(dom, lang, assertBinding)) {
       return true;
     }
     await abortableDelay(100, signal);
@@ -1016,10 +1034,27 @@ type HoverMod = {
   el: HTMLElement;
   hoveredAttr: boolean;
   hadHoveredClass: boolean;
+  hoveredProp: boolean | undefined;
   styleVisibility: string;
   styleOpacity: string;
   stylePointerEvents: string;
 };
+
+async function captionsEditorEntryOpen(
+  dom: CancellableDomService,
+): Promise<boolean> {
+  if (await dom.exists(getSubtitleTarget("subtitle.auto_translate"))) {
+    return true;
+  }
+  if (await dom.exists(getSubtitleTarget("subtitle.manual_captions_add"))) {
+    return true;
+  }
+  const editors = querySelectorAllDeep(
+    document,
+    "ytve-captions-editor-options-panel, ytve-timedtext-editor, ytve-captions-editor, [data-luftballons-captions-editor]",
+  ).filter((el) => isActiveElement(el) && !(el as HTMLElement).hidden);
+  return editors.length > 0;
+}
 
 async function revealAndClickCaptionsAdd(
   dom: CancellableDomService,
@@ -1088,10 +1123,12 @@ async function revealAndClickCaptionsAdd(
             continue;
           }
           if (!mods.some((m) => m.el === host)) {
+            const hostWithHover = host as HTMLElement & { hovered?: boolean };
             mods.push({
               el: host,
               hoveredAttr: host.hasAttribute("hovered"),
               hadHoveredClass: host.classList.contains("hovered"),
+              hoveredProp: hostWithHover.hovered,
               styleVisibility: host.style.visibility,
               styleOpacity: host.style.opacity,
               stylePointerEvents: host.style.pointerEvents,
@@ -1146,6 +1183,16 @@ async function revealAndClickCaptionsAdd(
         if (!m.hadHoveredClass) {
           m.el.classList.remove("hovered");
         }
+        try {
+          const hostWithHover = m.el as HTMLElement & { hovered?: boolean };
+          if (typeof m.hoveredProp === "boolean") {
+            hostWithHover.hovered = m.hoveredProp;
+          } else {
+            delete hostWithHover.hovered;
+          }
+        } catch {
+          /* ignore */
+        }
         m.el.style.visibility = m.styleVisibility;
         m.el.style.opacity = m.styleOpacity;
         m.el.style.pointerEvents = m.stylePointerEvents;
@@ -1190,14 +1237,14 @@ async function revealAndClickCaptionsAdd(
   if (humanGate) {
     const decision = await humanGate.request(
       {
-        capability: "WRITE_REVERSIBLE",
+        capability: "WRITE_COMMIT",
         title: "Hover captions cell",
         description: `Hover the captions cell (or open the editor) for ${lang.label} (${lang.code}), then Continue.`,
         consequences: [
           "Luftballons could not stamp #captions-add via synthetic hover",
-          "Continue after the captions add control is visible",
+          "Continue after the captions editor is open OR #captions-add is visible",
         ],
-        reversible: true,
+        reversible: false,
       },
       signal,
     );
@@ -1205,6 +1252,18 @@ async function revealAndClickCaptionsAdd(
       throw new UiMismatchError(`Human declined hover assist for ${lang.code}`);
     }
     assertBinding();
+    // User may have opened the editor already — do not force another #captions-add click.
+    if (await captionsEditorEntryOpen(dom)) {
+      return;
+    }
+    const listAfter = await resolveList();
+    const rowAfter = await findUniqueLanguageRow(listAfter, lang);
+    const cellAfter = rowAfter ? findCaptionsCell(rowAfter) : null;
+    const addAfter = cellAfter ? findUniqueCaptionsAddInCell(cellAfter) : null;
+    if (addAfter instanceof HTMLElement) {
+      addAfter.click();
+      return;
+    }
     if (await tryHoverAndClick()) {
       return;
     }
@@ -1213,6 +1272,51 @@ async function revealAndClickCaptionsAdd(
   throw new WaitTimeoutError(
     `Captions add (#captions-add) not found for ${lang.code} after hover`,
   );
+}
+
+/**
+ * Open an existing draft/published-edit track via captions-cell edit control.
+ */
+async function revealAndClickCaptionsEdit(
+  dom: CancellableDomService,
+  lang: SubtitleLanguage,
+  signal: AbortSignal,
+  assertBinding: () => void,
+): Promise<boolean> {
+  throwIfAborted(signal);
+  assertBinding();
+  const list = await dom.find(getSubtitleTarget("subtitle.languages.list"));
+  if (!list || !isActiveElement(list)) {
+    return false;
+  }
+  const row = await findUniqueLanguageRow(list, lang);
+  if (!row) {
+    return false;
+  }
+  const captionsCell = findCaptionsCell(row);
+  if (!captionsCell) {
+    return false;
+  }
+  // Reveal hover chrome so edit appears.
+  for (const host of captionsHoverHostsFromCell(captionsCell)) {
+    if (host instanceof HTMLElement) {
+      host.setAttribute("hovered", "");
+      host.classList.add("hovered");
+      simulatePointerHover(host);
+    }
+  }
+  const edit = findCaptionsEditInCell(captionsCell);
+  if (!edit) {
+    return false;
+  }
+  if (edit instanceof HTMLElement) {
+    edit.click();
+  } else {
+    edit.dispatchEvent(
+      new MouseEvent("click", { bubbles: true, cancelable: true, composed: true }),
+    );
+  }
+  return true;
 }
 
 async function clickManualCaptionsAdd(
@@ -1309,35 +1413,23 @@ function captionsContentReadyInRoot(root: Element): boolean {
     const text = value.replace(/\s+/g, " ").trim();
     if (
       text.length >= 2 &&
-      !/字幕空白|无法发布空白|自动翻译|选择方式|添加语言/i.test(text)
+      !/字幕空白|无法发布空白|自动翻译|选择方式|添加语言|正在翻译|Translating|Loading/i.test(
+        text,
+      )
     ) {
       return true;
     }
   }
-  // Substantial body text in editor shell (Layout A may not expose cue classes).
-  const bodyText = (root.textContent ?? "").replace(/\s+/g, " ").trim();
-  if (
-    bodyText.length >= 24 &&
-    !/字幕空白|无法发布空白/i.test(bodyText) &&
-    !/^(自动翻译|选择方式|上传文件|手动输入)/.test(bodyText)
-  ) {
-    // Exclude chrome-only panels that only list the auto-translate option.
-    if (
-      !bodyText.includes("将自动生成或手动添加的字幕") ||
-      bodyText.length > 80
-    ) {
-      return bodyText.length > 80;
-    }
-  }
+  // Do not treat whole-editor chrome text length as READY (UI copy can exceed 80 chars).
   return false;
 }
 
-/** True when tests/fixture captions harness is mounted (not live Studio). */
-function fixtureCaptionsHarnessPresent(): boolean {
-  return (
-    document.querySelector(
-      "[data-luftballons-captions-editor], [data-luftballons-captions-ready]",
-    ) !== null
+function editorRootLooksBusy(root: Element): boolean {
+  if (root.getAttribute("aria-busy") === "true") {
+    return true;
+  }
+  return /正在翻译|Translating|Loading|处理中|Processing/i.test(
+    (root.textContent ?? "").replace(/\s+/g, " "),
   );
 }
 
@@ -1364,7 +1456,10 @@ function hasLanguageScopedReadyMarker(lang: SubtitleLanguage): boolean {
   return anyReady.length === 1;
 }
 
-async function classifyTranslatePhase(
+/**
+ * Single state machine for fixture + live. Publish enabled alone is never READY.
+ */
+export async function classifyTranslatePhase(
   dom: CancellableDomService,
   lang: SubtitleLanguage,
 ): Promise<CaptionsTranslatePhase> {
@@ -1375,75 +1470,84 @@ async function classifyTranslatePhase(
     return "READY";
   }
   const root = activeCaptionsEditorRoot(lang);
+  if (root && editorRootLooksBusy(root)) {
+    return "TRANSLATING";
+  }
   if (root && captionsContentReadyInRoot(root)) {
     return "READY";
-  }
-  // Live Layout A: no calibrated cue DOM — keep TRANSLATING until publish-stable READY.
-  if (root) {
-    const busy =
-      root.getAttribute("aria-busy") === "true" ||
-      /正在翻译|Translating|Loading/i.test(
-        (root.textContent ?? "").replace(/\s+/g, " "),
-      );
-    if (busy) {
-      return "TRANSLATING";
-    }
   }
   const publishEnabled = await dom.exists(getSubtitleTarget("subtitle.publish"));
   if (!publishEnabled) {
     return "TRANSLATING";
   }
-  // Publish enabled but no cue markers yet — still translating on live; fixture waits marker.
-  return fixtureCaptionsHarnessPresent() ? "TRANSLATING" : "TRANSLATING";
+  if (!root) {
+    return "UNKNOWN";
+  }
+  // Publish enabled but no reliable cue signal — not READY.
+  return "UNKNOWN";
 }
 
 /**
- * Wait until captions are READY. Fixture requires explicit ready markers.
- * Live Layout A (no cue DOM in calibration): 发布 stays enabled for a short
- * stability window without blank-error → READY.
+ * Wait until captions are READY (cue/marker evidence only).
+ * On timeout: optional Human Gate then one re-check; still not READY → refuse publish.
  */
-async function waitUntilCaptionsReady(
+export async function waitUntilCaptionsReady(
   dom: CancellableDomService,
   lang: SubtitleLanguage,
   signal: AbortSignal,
-  timeoutMs = CAPTIONS_READY_TIMEOUT_MS,
+  timeoutMs: number = CAPTIONS_READY_TIMEOUT_MS,
+  humanGate?: HumanGateService,
 ): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  const publishStableMs = fixtureCaptionsHarnessPresent() ? 60_000 : 2_000;
-  let publishEnabledSince: number | null = null;
-
-  while (Date.now() <= deadline) {
-    throwIfAborted(signal);
-    const phase = await classifyTranslatePhase(dom, lang);
-    if (phase === "READY") {
-      await abortableDelay(120, signal);
-      if ((await classifyTranslatePhase(dom, lang)) === "READY") {
-        return;
+  const waitLoop = async (budgetMs: number): Promise<boolean> => {
+    const deadline = Date.now() + budgetMs;
+    while (Date.now() <= deadline) {
+      throwIfAborted(signal);
+      const phase = await classifyTranslatePhase(dom, lang);
+      if (phase === "READY") {
+        await abortableDelay(120, signal);
+        if ((await classifyTranslatePhase(dom, lang)) === "READY") {
+          return true;
+        }
+        continue;
       }
-      publishEnabledSince = null;
-      continue;
+      if (phase === "ERROR") {
+        throw new UiMismatchError(
+          "Studio captions error while waiting for translate ready",
+        );
+      }
+      await abortableDelay(100, signal);
     }
-    if (phase === "ERROR") {
-      throw new UiMismatchError(
-        "Studio captions error while waiting for translate ready",
+    return false;
+  };
+
+  if (await waitLoop(timeoutMs)) {
+    return;
+  }
+
+  if (humanGate) {
+    const decision = await humanGate.request(
+      {
+        capability: "WRITE_COMMIT",
+        title: "Confirm captions translation ready",
+        description: `Studio did not expose a reliable READY signal for ${lang.label} (${lang.code}). Continue only when translation looks finished in the editor.`,
+        consequences: [
+          "Publish will be refused if cues are still missing after Continue",
+          "Do not Continue while「正在翻译」is visible",
+        ],
+        reversible: false,
+      },
+      signal,
+    );
+    if (decision === "REJECTED") {
+      throw new WaitTimeoutError(
+        `Captions not READY for ${lang.code}; human declined ready confirm`,
       );
     }
-
-    const publishEnabled = await dom.exists(getSubtitleTarget("subtitle.publish"));
-    const blank = await blankPublishErrorVisible(dom);
-    if (publishEnabled && !blank && !fixtureCaptionsHarnessPresent()) {
-      if (publishEnabledSince === null) {
-        publishEnabledSince = Date.now();
-      } else if (Date.now() - publishEnabledSince >= publishStableMs) {
-        // Layout A calibrated: 发布 enabled after 自动翻译 (content may lack cue selectors).
-        return;
-      }
-    } else {
-      publishEnabledSince = null;
+    if (await waitLoop(1_500)) {
+      return;
     }
-
-    await abortableDelay(100, signal);
   }
+
   throw new WaitTimeoutError(
     `Captions not READY for ${lang.code} within ${timeoutMs}ms (refusing to publish)`,
   );
@@ -1462,6 +1566,7 @@ async function autoTranslateAndPublish(
   assertBinding: () => void,
   lang: SubtitleLanguage,
   opts?: { skipAutoTranslateClick?: boolean },
+  humanGate?: HumanGateService,
 ): Promise<void> {
   throwIfAborted(signal);
   assertBinding();
@@ -1493,7 +1598,7 @@ async function autoTranslateAndPublish(
     );
   }
 
-  await waitUntilCaptionsReady(dom, lang, signal);
+  await waitUntilCaptionsReady(dom, lang, signal, CAPTIONS_READY_TIMEOUT_MS, humanGate);
   throwIfAborted(signal);
   assertBinding();
   if (!(await dom.exists(publish))) {
@@ -1541,7 +1646,13 @@ async function autoTranslateAndPublish(
     throw new UiMismatchError("Publish control reported an error after click");
   }
   if (outcome === "blank") {
-    await waitUntilCaptionsReady(dom, lang, signal, TRANSLATE_RETRY_SETTLE_MS);
+    await waitUntilCaptionsReady(
+      dom,
+      lang,
+      signal,
+      TRANSLATE_RETRY_SETTLE_MS,
+      humanGate,
+    );
     throwIfAborted(signal);
     assertBinding();
     if (!(await dom.exists(publish))) {
@@ -1665,7 +1776,15 @@ async function addTranslateAndPublishLanguage(
       humanGate,
     );
   }
-  await autoTranslateAndPublish(dom, deps, signal, assertBinding, lang);
+  await autoTranslateAndPublish(
+    dom,
+    deps,
+    signal,
+    assertBinding,
+    lang,
+    undefined,
+    humanGate,
+  );
 }
 
 function buildResult(
@@ -2003,23 +2122,58 @@ export async function runSubtitleMultilangWorkflow(
           ctx.signal,
           assertBinding,
           lang,
+          undefined,
+          ctx.humanGate,
         );
       } else {
-        // resume_draft: open track; publish if ready, else translate once if no cues
-        try {
-          await revealAndClickCaptionsAdd(
+        // resume_draft: open via edit (not #captions-add); wait if loading; no blind re-translate
+        const openedEdit = await revealAndClickCaptionsEdit(
+          deps.dom,
+          lang,
+          ctx.signal,
+          assertBinding,
+        );
+        if (!openedEdit) {
+          try {
+            await revealAndClickCaptionsAdd(
+              deps.dom,
+              lang,
+              ctx.signal,
+              assertBinding,
+              ctx.humanGate,
+            );
+          } catch {
+            await clickManualCaptionsAdd(deps.dom, ctx.signal);
+          }
+        }
+        let phase = await classifyTranslatePhase(deps.dom, lang);
+        const autoVisibleEarly = await deps.dom.exists(
+          getSubtitleTarget("subtitle.auto_translate"),
+        );
+        // Wait only while loading/busy — not when the empty options panel is already open.
+        if (
+          phase === "TRANSLATING" ||
+          (phase === "UNKNOWN" && !autoVisibleEarly)
+        ) {
+          await waitUntilCaptionsReady(
             deps.dom,
             lang,
             ctx.signal,
-            assertBinding,
+            CAPTIONS_READY_TIMEOUT_MS,
             ctx.humanGate,
           );
-        } catch {
-          await clickManualCaptionsAdd(deps.dom, ctx.signal);
+          phase = await classifyTranslatePhase(deps.dom, lang);
         }
-        const phase = await classifyTranslatePhase(deps.dom, lang);
+        if (phase === "ERROR") {
+          throw new UiMismatchError(
+            `Draft editor error for ${lang.code} before publish`,
+          );
+        }
         const publishEnabled = await deps.dom.exists(
           getSubtitleTarget("subtitle.publish"),
+        );
+        const autoVisible = await deps.dom.exists(
+          getSubtitleTarget("subtitle.auto_translate"),
         );
         if (phase === "READY" && publishEnabled) {
           await autoTranslateAndPublish(
@@ -2029,18 +2183,22 @@ export async function runSubtitleMultilangWorkflow(
             assertBinding,
             lang,
             { skipAutoTranslateClick: true },
+            ctx.humanGate,
           );
-        } else if (phase !== "READY") {
+        } else if (autoVisible) {
+          // Options panel / empty track entry — one translate allowed.
           await autoTranslateAndPublish(
             deps.dom,
             deps,
             ctx.signal,
             assertBinding,
             lang,
+            undefined,
+            ctx.humanGate,
           );
         } else {
           throw new UiMismatchError(
-            `Draft for ${lang.code} ambiguous (READY but publish unavailable)`,
+            `Draft for ${lang.code} not READY after wait (refusing blind re-translate)`,
           );
         }
       }

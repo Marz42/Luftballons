@@ -465,16 +465,30 @@ function appendSubtitlesBody(
         captionsReady.setAttribute("data-language-code", code);
         captionsReady.setAttribute("data-luftballons-subtitle-lang", code);
       }
-      captionsReady.textContent = `Fixture cue (${code || "?"}): Hallo Welt`;
+      // Real cue-shaped content (also works if ready attr were absent).
+      captionsReady.replaceChildren();
+      const cue = document.createElement("div");
+      cue.className = "cue-text";
+      cue.textContent = `Fixture cue (${code || "?"}): Hallo Welt`;
+      captionsReady.append(cue);
       captionsReady.hidden = false;
       blankError.hidden = true;
-    } else {
-      captionsReady.removeAttribute("data-luftballons-captions-ready");
-      captionsReady.removeAttribute("data-language-code");
-      captionsReady.removeAttribute("data-luftballons-subtitle-lang");
-      captionsReady.textContent = "";
-      captionsReady.hidden = true;
+      return;
     }
+    captionsReady.removeAttribute("data-luftballons-captions-ready");
+    captionsReady.removeAttribute("data-language-code");
+    captionsReady.removeAttribute("data-luftballons-subtitle-lang");
+    captionsReady.replaceChildren();
+    if (!code) {
+      // Editor closed / list restored.
+      captionsReady.hidden = true;
+      return;
+    }
+    const busy = document.createElement("div");
+    busy.textContent = "正在翻译…";
+    captionsReady.append(busy);
+    // Keep visible so classifyTranslatePhase can see TRANSLATING (live-shaped).
+    captionsReady.hidden = false;
   };
 
   if (data.leftoverReadyLanguageCode) {
@@ -517,6 +531,19 @@ function appendSubtitlesBody(
     cellContainer.append(status);
     hoverCell.append(cellContainer);
     captionsCell.append(hoverCell);
+
+    if (captionsStatus === "draft") {
+      const editBtn = document.createElement("button");
+      editBtn.type = "button";
+      editBtn.setAttribute("aria-label", "编辑");
+      editBtn.setAttribute("role", "button");
+      editBtn.textContent = "编辑";
+      editBtn.addEventListener("click", () => {
+        activeCaptionsLang = langCode;
+        autoTranslateBtn.hidden = false;
+      });
+      cellContainer.append(editBtn);
+    }
 
     if (captionsStatus === "dash" || captionsStatus === "draft") {
       const stampCaptionsAdd = (): void => {
@@ -734,9 +761,9 @@ function appendSubtitlesBody(
       }
     }
     autoTranslateBtn.hidden = true;
+    activeCaptionsLang = null;
     markCaptionsReady(false);
     blankError.hidden = true;
-    activeCaptionsLang = null;
     setPublishEnabled(false);
     renderItems();
     onLanguagesChanged();
