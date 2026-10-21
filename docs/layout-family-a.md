@@ -235,3 +235,34 @@ tbody tr
 | picker `test-id` | 与 lang.code 精确一致 | 保留；禁前缀匹配 |
 | hover `#captions-add`/edit 控件 | 「修改」文案、`#captions-edit` | 补 id/文案匹配 |
 | shadow DOM deep 查询 | Studio 无 shadow | 降级为预防项 |
+
+
+## 9. 编辑器对话框（写入路径，2026-10-21 真机标定）
+
+选中语言行进入编辑器后，整体宿主是 **`tp-yt-paper-dialog#dialog`**：
+
+```
+tp-yt-paper-dialog#dialog
+├ ytve-captions-editor-options-panel     ← 「修改时间/字幕/以文本形式修改」+ 自动翻译入口
+│  └ div.scrollable-options#editing-container
+│    └ tp-yt-iron-list#items             ← 虚拟列表：离屏 cue 项被隐藏（visibility/display）
+│      └ div → div.ytve-captions-editor-caption-segment-line
+│        ├ div.original-text             ← 原文参考
+│        ├ div.segment-text              ← 标签「副标题」+ 正文 + 提示「按 Enter」
+│        └ ytve-lightweight-textarea
+│          └ pre                         ← **纯字幕正文（READY 的正确证据）**
+└ section#secondary-header
+  └ div#save-container
+    └ ytcp-button#publish-button > button[aria-label="发布"]   ← **发布控件在面板之外**
+```
+
+要点：
+- **READY 证据** = `ytve-lightweight-textarea pre` 的正文（内容存在即就绪）；虚拟列表的
+  隐藏不代表未就绪（用 `isLoadedContent`，不要用 `isActiveElement`）。
+- **发布按钮不在 options panel 内**——操作范围必须取含 `#publish-button` 的宿主
+  （否则 waitFor(publish) 永远超时）。
+- 编辑器无 `data-language-code`、chrome 文本不含语言名 → 语言绑定为 unknown；
+  单一活动编辑器可用，mismatch 仍拒绝。
+- 自动翻译完成前「发布」可能已启用（空白字幕竞态）——必须等 cue 正文出现。
+- `#choose-auto-translate`（「自动翻译」）在翻译完成后消失。
+- 语言行未保存草稿在刷新后消失；发布后变为「已发布 <日期>」（metadata 列可为「–」）。
