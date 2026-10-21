@@ -26,7 +26,16 @@ import {
   getTarget,
 } from "../../selectors.js";
 import type { ChannelBasicData, RecentVideoSnapshot } from "./schema.js";
-import { parseDisplayMetric, type MetricPrecision } from "./metrics.js";
+import {
+  parseDisplayMetric,
+  isDisplayPlaceholder,
+  type MetricPrecision,
+} from "./metrics.js";
+import {
+  detectContentFamily,
+  parseFamilyAVideos,
+  contentReady,
+} from "./content-adapter.js";
 
 export const CHANNEL_BASIC_COLLECTOR_ID = "youtube.channel.basic";
 export const CHANNEL_BASIC_COLLECTOR_VERSION = 2;
@@ -118,28 +127,36 @@ function metricText(el: Element | null): string | null {
   return text.length > 0 ? text : null;
 }
 
+/** How a metric source read resolved. ABSENT = UI shows no value (e.g. 「—」). */
+type MetricRead = "VALUE" | "ABSENT" | "UNREADABLE";
+
 function applyMetric(
   draft: DraftMetrics,
   field: "views" | "subscriberDelta",
   raw: string | null,
   warnings: TaskWarning[],
   source: string,
-): void {
+): MetricRead {
   const parsed = parseDisplayMetric(raw);
   if (!parsed) {
+    // Placeholder (「—」「–」「— 无法比较」…) is "no value shown", not bad data.
+    if (isDisplayPlaceholder(raw)) {
+      return "ABSENT";
+    }
     if (raw !== null && raw.trim().length > 0) {
       warn(
         warnings,
         "METRIC_UNPARSED",
         `Could not parse ${field} from ${source}: "${raw}"`,
       );
+      return "UNREADABLE";
     }
-    return;
+    return "ABSENT";
   }
   if (field === "views") {
     if (parsed.value < 0) {
       warn(warnings, "VALIDATION", `views from ${source} was negative; dropped`);
-      return;
+      return "UNREADABLE";
     }
     draft.views = parsed.value;
     draft.viewsPrecision = parsed.precision;
@@ -154,6 +171,7 @@ function applyMetric(
       `${field} from ${source} used UI abbreviation (precision=DISPLAY_ROUNDED, value=${parsed.value})`,
     );
   }
+  return "VALUE";
 }
 
 function readVideoIdFromRow(row: Element): string | undefined {
@@ -167,7 +185,13 @@ function readVideoIdFromRow(row: Element): string | undefined {
   if (links.length !== 1) return undefined;
   const link = links[0];
   const href = link?.getAttribute("href") ?? "";
-  const match = href.match(/^\/video\/([^/?#]+)\/edit(?:[/?#]|$)/i);
+  let pathname = href;
+  try {
+    pathname = new URL(href, "https://studio.youtube.com").pathname;
+  } catch {
+    /* keep raw href as pathname */
+  }
+  const match = pathname.match(/^\/video\/([^/?#]+)\/edit(?:[/?#]|$)/i);
   return match?.[1];
 }
 
@@ -222,6 +246,7 @@ function validateAndBuild(
   },
   warnings: TaskWarning[],
   capturedAt: string,
+  absentFields: ReadonlySet<string> = new Set(),
 ): { data: ChannelBasicData; status: "COMPLETE" | "PARTIAL" } {
   if (!Number.isFinite(Date.parse(capturedAt))) {
     warn(warnings, "VALIDATION", "capturedAt is not a valid ISO timestamp");
@@ -253,18 +278,29 @@ function validateAndBuild(
     recentVideos: draft.recentVideos,
   };
 
+  // Core-field completeness (SPEC §19). A metric the Studio UI itself does not
+  // show (placeholder 「—」/empty) is legitimately absent — not a collection
+  // failure and must not poison the status (H5).
   const missingCore =
     draft.views === undefined ||
-    draft.subscriberDelta === undefined ||
+    (draft.subscriberDelta === undefined &&
+      !absentFields.has("subscriberDelta")) ||
     draft.recentVideos.length === 0 ||
     draft.channelName.trim().length === 0;
 
-  // DISPLAY_ROUNDED is expected for abbreviated UI — does not force PARTIAL alone.
-  const blockingWarnings = warnings.some(
-    (w) => w.code !== "METRIC_DISPLAY_ROUNDED",
-  );
+  // Warnings that evidence lost/incomplete data still force PARTIAL.
+  // Informational ones (display rounding, UI-absent metrics) do not (H5).
+  const lossCodes = new Set([
+    "METRIC_UNPARSED",
+    "VIDEO_SKIPPED",
+    "VIDEO_SCOPE_PARTIAL",
+    "CONTENT_LOAD_TIMEOUT",
+    "ANALYTICS_PERIOD_UNKNOWN",
+    "VALIDATION",
+  ]);
+  const dataLoss = warnings.some((w) => lossCodes.has(w.code));
   const status: "COMPLETE" | "PARTIAL" =
-    missingCore || blockingWarnings ? "PARTIAL" : "COMPLETE";
+    missingCore || dataLoss ? "PARTIAL" : "COMPLETE";
 
   return { data, status };
 }
@@ -275,6 +311,7 @@ async function saveCollection(
   data: ChannelBasicData,
   status: "COMPLETE" | "PARTIAL",
   capturedAt: string,
+  warnings: TaskWarning[] = [],
 ): Promise<Collection<ChannelBasicData>> {
   const installationId =
     deps.installationId ?? getOrCreateInstallation().installationId;
@@ -287,6 +324,10 @@ async function saveCollection(
     capturedAt,
     status,
     data,
+    // Observability: history must explain PARTIAL (audit §6.2 gap).
+    ...(warnings.length > 0
+      ? { warnings: warnings.map((w) => ({ code: w.code, message: w.message })) }
+      : {}),
   };
   await ctx.collections.save(collection);
   return collection;
@@ -315,22 +356,25 @@ export async function runChannelBasicCollector(
     recentVideos: [],
   };
   let savedId: string | undefined;
+  /** Fields the Studio UI itself shows as "no value" (placeholder) — not failures. */
+  const absentFields = new Set<string>();
+  const hasPayload = (): boolean =>
+    draft.channelName.trim().length > 0 ||
+    draft.views !== undefined ||
+    draft.subscriberDelta !== undefined ||
+    draft.recentVideos.length > 0;
 
   const persistPartial = async (summary: string): Promise<TaskResult> => {
-    const built = validateAndBuild(draft, warnings, capturedAt);
+    const built = validateAndBuild(draft, warnings, capturedAt, absentFields);
     // Always PARTIAL when cancelling mid-flight with any useful payload.
-    const hasPayload =
-      draft.channelName.trim().length > 0 ||
-      draft.views !== undefined ||
-      draft.subscriberDelta !== undefined ||
-      draft.recentVideos.length > 0;
-    if (hasPayload) {
+    if (hasPayload()) {
       const collection = await saveCollection(
         ctx,
         deps,
         built.data,
         "PARTIAL",
         capturedAt,
+        warnings,
       );
       savedId = collection.collectionId;
       return {
@@ -351,19 +395,15 @@ export async function runChannelBasicCollector(
     check: { message: string },
   ): Promise<TaskResult> => {
     warn(warnings, "CHANNEL_SWITCHED", check.message);
-    const built = validateAndBuild(draft, warnings, capturedAt);
-    const hasPayload =
-      draft.channelName.trim().length > 0 ||
-      draft.views !== undefined ||
-      draft.subscriberDelta !== undefined ||
-      draft.recentVideos.length > 0;
-    if (hasPayload) {
+    const built = validateAndBuild(draft, warnings, capturedAt, absentFields);
+    if (hasPayload()) {
       const collection = await saveCollection(
         ctx,
         deps,
         built.data,
         "PARTIAL",
         capturedAt,
+        warnings,
       );
       return {
         status: "PARTIAL",
@@ -381,6 +421,7 @@ export async function runChannelBasicCollector(
 
   try {
     throwIfAborted(ctx.signal);
+    ctx.setProgress("Detecting channel…", "RUNNING");
     ctx.logger.info("Detect channel context");
 
     const expectedChannelId = extractChannelIdFromHref(deps.getHref());
@@ -394,6 +435,7 @@ export async function runChannelBasicCollector(
     }
 
     throwIfAborted(ctx.signal);
+    ctx.setProgress("Reading channel summary (Dashboard)…", "RUNNING");
     ctx.logger.info("Read dashboard data");
 
     if (deps.navigation.currentPage() !== "DASHBOARD") {
@@ -416,14 +458,14 @@ export async function runChannelBasicCollector(
       draft.periodLabel = periodRaw;
     }
 
-    applyMetric(
+    const dashViewsRead = applyMetric(
       metrics,
       "views",
       await deps.dom.readText(getTarget("dashboard.views")),
       warnings,
       "dashboard",
     );
-    applyMetric(
+    const dashDeltaRead = applyMetric(
       metrics,
       "subscriberDelta",
       await deps.dom.readText(getTarget("dashboard.subscriberDelta")),
@@ -436,12 +478,17 @@ export async function runChannelBasicCollector(
     if (metrics.subscriberDelta !== undefined) {
       draft.subscriberDelta = metrics.subscriberDelta;
     }
+    // Dashboard is the summary source unless Analytics is adopted below.
+    absentFields.clear();
+    if (dashViewsRead === "ABSENT") absentFields.add("views");
+    if (dashDeltaRead === "ABSENT") absentFields.add("subscriberDelta");
 
     const needAnalytics =
       draft.views === undefined || draft.subscriberDelta === undefined;
 
     if (needAnalytics) {
       throwIfAborted(ctx.signal);
+      ctx.setProgress("Reading analytics summary…", "RUNNING");
       ctx.logger.info("Navigate Analytics for missing metrics");
       await deps.navigation.navigate("ANALYTICS", ctx.signal);
       await deps.navigation.waitReady("ANALYTICS", undefined, ctx.signal);
@@ -456,8 +503,8 @@ export async function runChannelBasicCollector(
       const analyticsPeriod = await deps.dom.readText(getTarget("analytics.period"));
       const dates = periodDates(await deps.dom.readText(getTarget("analytics.dates")));
       const analytics: DraftMetrics = {};
-      applyMetric(analytics, "views", await deps.dom.readText(getTarget("analytics.views")), warnings, "analytics");
-      applyMetric(analytics, "subscriberDelta", await deps.dom.readText(getTarget("analytics.subscriberDelta")), warnings, "analytics");
+      const anViewsRead = applyMetric(analytics, "views", await deps.dom.readText(getTarget("analytics.views")), warnings, "analytics");
+      const anDeltaRead = applyMetric(analytics, "subscriberDelta", await deps.dom.readText(getTarget("analytics.subscriberDelta")), warnings, "analytics");
       // Never merge a dashboard metric with an unverified Analytics period.
       // If Analytics has values, use that page as the sole summary source.
       if (analytics.views !== undefined || analytics.subscriberDelta !== undefined) {
@@ -466,6 +513,10 @@ export async function runChannelBasicCollector(
           else draft.views = analytics.views;
           if (analytics.subscriberDelta === undefined) delete draft.subscriberDelta;
           else draft.subscriberDelta = analytics.subscriberDelta;
+          // Analytics becomes the sole source — its absences are authoritative.
+          absentFields.clear();
+          if (anViewsRead === "ABSENT") absentFields.add("views");
+          if (anDeltaRead === "ABSENT") absentFields.add("subscriberDelta");
           draft.periodLabel = analyticsPeriod;
           draft.periodStart = dates.start;
           draft.periodEnd = dates.end;
@@ -474,10 +525,10 @@ export async function runChannelBasicCollector(
         }
       }
 
-      if (draft.views === undefined) {
+      if (draft.views === undefined && !absentFields.has("views")) {
         warn(warnings, "VIEWS_MISSING", "Views not found on Dashboard or Analytics");
       }
-      if (draft.subscriberDelta === undefined) {
+      if (draft.subscriberDelta === undefined && !absentFields.has("subscriberDelta")) {
         warn(
           warnings,
           "SUBSCRIBER_DELTA_MISSING",
@@ -498,42 +549,120 @@ export async function runChannelBasicCollector(
     }
     throwIfAborted(ctx.signal);
 
-    // A SPA shell can be ready before its rows/cells arrive. Observe content
+    ctx.setProgress("Reading recent videos…", "RUNNING");
+    // A SPA shell can be ready before its rows/cards arrive. Observe content
     // mutations during this task; never conclude an empty list from one read.
+    // Readiness = surface rendered with at least one row/card (H4) — a single
+    // unparseable row must not block the whole list forever.
     let list: Element | null = null;
     try {
       list = await deps.dom.waitFor({
         id: "content.videos.loaded",
-        selectorFallback: 'ytcp-video-section-content#video-list, [data-luftballons-target="content.videos.list"]',
+        selectorFallback: [
+          "ytcp-video-section-content#video-list",
+          'ytcp-section-list-renderer[data-target-id="browse-feedFEcontent_hub"]',
+          '[data-luftballons-target="content.videos.list"]',
+        ],
         unique: true,
-        matches: candidate => {
-          if (!isActiveElement(candidate)) return false;
-          const rows = Array.from(candidate.querySelectorAll(CONTENT_VIDEO_ROW_SELECTOR)).filter(isActiveElement);
-          return rows.length > 0 && rows.every(row => readCell(row, "title") !== null && readCell(row, "views") !== null);
-        },
+        matches: (candidate) => isActiveElement(candidate) && contentReady(candidate),
       }, deps.contentTimeoutMs ?? 5_000, ctx.signal);
     } catch (error) {
       if (!(error instanceof DomTimeoutError)) throw error;
-      warn(warnings, "CONTENT_LOAD_TIMEOUT", "Video rows did not finish loading before timeout; preserving available data");
+      warn(warnings, "CONTENT_LOAD_TIMEOUT", "Video rows/cards did not finish loading before timeout; preserving available data");
       list = await deps.dom.find(getTarget("content.videos.list"));
     }
     throwIfAborted(ctx.signal);
-    if (!list) {
+    const family = detectContentFamily(deps.document ?? document);
+    if (family === "A_HUB") {
+      // Family A (Content Hub): shelf lockup cards, no table/pagination.
+      // docs/layout-family-a.md §1.2.
+      const cards = parseFamilyAVideos(deps.document ?? document);
+      if (cards.length === 0) {
+        warn(
+          warnings,
+          "RECENT_VIDEOS_MISSING",
+          "Content Hub rendered but no video cards parsed",
+        );
+      }
+      warn(
+        warnings,
+        "VIDEO_SCOPE_PARTIAL",
+        "Family A Content Hub: captured rendered shelf cards only (full list behind 查看全部)",
+      );
+      for (const card of cards) {
+        throwIfAborted(ctx.signal);
+        if (card.skipReason) {
+          warn(
+            warnings,
+            "VIDEO_SKIPPED",
+            `Skipped content card${card.videoId ? ` ${card.videoId}` : ""}: ${card.skipReason}`,
+          );
+          continue;
+        }
+        if (card.viewsRounded) {
+          warn(
+            warnings,
+            "METRIC_DISPLAY_ROUNDED",
+            `recent video "${card.title}" views abbreviation → ${card.views}`,
+          );
+        }
+        if (card.views === undefined) {
+          warn(
+            warnings,
+            "VIDEO_SKIPPED",
+            `Skipped content card${card.videoId ? ` ${card.videoId}` : ""}: views unreadable`,
+          );
+          continue;
+        }
+        const snap: RecentVideoSnapshot = {
+          title: card.title,
+          views: card.views,
+          capturedAt,
+          ...(card.videoId ? { videoId: card.videoId } : {}),
+          ...(card.publishedAt ? { publishedAt: card.publishedAt } : {}),
+        };
+        draft.recentVideos.push(snap);
+      }
+    } else if (!list) {
       warn(
         warnings,
         "RECENT_VIDEOS_MISSING",
         "Content video list selector failed; recentVideos empty",
       );
     } else {
-      const rows = Array.from(list.querySelectorAll(CONTENT_VIDEO_ROW_SELECTOR)).filter(isActiveElement);
+      let rows = Array.from(list.querySelectorAll(CONTENT_VIDEO_ROW_SELECTOR)).filter(isActiveElement);
+      // Cells can stream in after their row shell (calibration P2-2 style).
+      // Give unreadable cells a bounded settle window before declaring the row
+      // unparseable — but never wait forever for one bad row (H4).
+      const settleDeadline = Date.now() + (deps.contentTimeoutMs ?? 5_000);
+      while (Date.now() < settleDeadline) {
+        throwIfAborted(ctx.signal);
+        const pending = rows.some(
+          (row) => readCell(row, "title") === null || readCell(row, "views") === null,
+        );
+        if (!pending) break;
+        await new Promise<void>((resolve) => {
+          const timer = setTimeout(resolve, 50);
+          ctx.signal.addEventListener(
+            "abort",
+            () => {
+              clearTimeout(timer);
+              resolve();
+            },
+            { once: true },
+          );
+        });
+        rows = Array.from(list.querySelectorAll(CONTENT_VIDEO_ROW_SELECTOR)).filter(isActiveElement);
+      }
+      throwIfAborted(ctx.signal);
       if (list.matches("ytcp-video-section-content#video-list")) {
         const sort = list.querySelector(CONTENT_FIELDS.dateSort)?.getAttribute("aria-sort");
         if (sort !== "descending") warn(warnings, "VIDEO_ORDER_UNKNOWN", "Current video rows are not confirmed date-descending");
         const footer = list.querySelector(CONTENT_FIELDS.footer);
         const next = footer?.querySelector(CONTENT_FIELDS.next);
         const previous = footer?.querySelector(CONTENT_FIELDS.previous);
-        const disabled = (el: Element | null | undefined): boolean => Boolean(el?.hasAttribute("disabled") && el.getAttribute("aria-disabled") === "true");
-        const range = metricText(footer?.querySelector(CONTENT_FIELDS.range) ?? null)?.match(/^第\s*([\d,]+)\s*-\s*([\d,]+)\s*条，共\s*([\d,]+)\s*条$/);
+        const disabled = (el: Element | null | undefined): boolean => Boolean(Boolean(el?.hasAttribute("disabled")) && el?.getAttribute("aria-disabled") === "true");
+        const range = metricText(footer?.querySelector(CONTENT_FIELDS.range) ?? null)?.match(/第\s*([\d,]+)\s*[-–—]\s*([\d,]+)\s*条[，,]\s*共\s*([\d,]+)\s*条/) ?? metricText(footer?.querySelector(CONTENT_FIELDS.range) ?? null)?.match(/([\d,]+)\s*[-–—]\s*([\d,]+)\s*(?:of|\/|共)\s*([\d,]+)/i);
         const numbers = range?.slice(1).map(n => Number(n.replace(/,/g, "")));
         if (!disabled(next) || !disabled(previous) || !numbers || numbers[0] !== 1 || numbers[1] !== rows.length || numbers[2] !== rows.length) {
           warn(warnings, "VIDEO_SCOPE_PARTIAL", "Only currently rendered video rows captured; full filtered list not verified");
@@ -585,14 +714,16 @@ export async function runChannelBasicCollector(
     }
 
     throwIfAborted(ctx.signal);
+    ctx.setProgress("Saving collection…", "RUNNING");
     ctx.logger.info("Normalize and validate");
-    const built = validateAndBuild(draft, warnings, capturedAt);
+    const built = validateAndBuild(draft, warnings, capturedAt, absentFields);
     const collection = await saveCollection(
       ctx,
       deps,
       built.data,
       built.status,
       capturedAt,
+      warnings,
     );
     savedId = collection.collectionId;
 
@@ -613,6 +744,34 @@ export async function runChannelBasicCollector(
       });
       return persistPartial("Cancelled by user; partial data retained when present");
     }
-    throw error;
+    // Fail-partial (H1 / SPEC §19): a non-abort failure must not discard the
+    // data already read — save what exists as PARTIAL instead of losing it.
+    const message =
+      error instanceof Error ? error.message : "collector failed unexpectedly";
+    ctx.logger.error("Collector error", { message });
+    warn(warnings, "COLLECTOR_ERROR", message);
+    if (hasPayload()) {
+      const built = validateAndBuild(draft, warnings, capturedAt, absentFields);
+      const collection = await saveCollection(
+        ctx,
+        deps,
+        built.data,
+        "PARTIAL",
+        capturedAt,
+        warnings,
+      );
+      savedId = collection.collectionId;
+      return {
+        status: "PARTIAL",
+        summary: `Collection interrupted (${message}); partial data retained`,
+        collectionIds: [collection.collectionId],
+        warnings: [...warnings],
+      };
+    }
+    return {
+      status: "FAILED",
+      summary: `Collection failed: ${message}`,
+      warnings: [...warnings],
+    };
   }
 }

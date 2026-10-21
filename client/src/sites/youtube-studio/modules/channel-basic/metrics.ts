@@ -22,6 +22,18 @@ export interface MetricValue {
 
 const PLACEHOLDER = /^(?:—|–|−|-|n\/?a|null|none|\.{3}|…)?$/i;
 
+/**
+ * Studio "no value" markers that are NOT parse failures (H5).
+ * A leading dash glyph (—/–/−/-) marks an absent value, optionally followed by
+ * chrome like「无法比较」; bare placeholders and empty strings count too.
+ */
+export function isDisplayPlaceholder(raw: string | null | undefined): boolean {
+  if (raw === null || raw === undefined) return true;
+  const text = raw.replace(/\s+/g, " ").trim();
+  if (text.length === 0 || PLACEHOLDER.test(text)) return true;
+  return /^[—–−-]/.test(text);
+}
+
 const ABBREV =
   /^([+-]?)(\d+(?:\.\d+)?)\s*([KMB])\b/i;
 

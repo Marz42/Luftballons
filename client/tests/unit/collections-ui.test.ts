@@ -142,4 +142,41 @@ describe("Collections UI (P1-T4)", () => {
     expect(empty.textContent).toContain("No collections yet");
     section.root.remove();
   });
+
+  it("renders persisted warnings so PARTIAL history explains itself", async () => {
+    const dbName = `luftballons-ui-warn-${Math.random().toString(16).slice(2)}`;
+    dbNames.push(dbName);
+    const collections = new IndexedDbCollectionService({ dbName });
+    const base = makeCollection(1);
+    await collections.save({
+      ...base,
+      warnings: [
+        { code: "VIDEO_SCOPE_PARTIAL", message: "hub shelf cards only" },
+        { code: "CHANNEL_NAME_MISSING", message: "name unreadable" },
+      ],
+    });
+    const registry = new ModuleRegistry();
+    const logger = silentLogger();
+    const runtime = createRuntime({
+      registry,
+      taskRunner: new TaskRunner({
+        registry,
+        logger,
+        collectionService: collections,
+      }),
+      logger,
+      collections,
+    });
+
+    const section = createCollectionsSection(runtime);
+    document.body.appendChild(section.root);
+    await section.refresh();
+    const warnBox = section.root.querySelector(
+      "[data-collection-warnings]",
+    );
+    expect(warnBox).toBeTruthy();
+    expect(warnBox?.textContent).toContain("VIDEO_SCOPE_PARTIAL");
+    expect(warnBox?.textContent).toContain("CHANNEL_NAME_MISSING");
+    section.root.remove();
+  });
 });

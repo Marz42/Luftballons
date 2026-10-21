@@ -626,7 +626,7 @@ describe("youtube.subtitle.multilang (FT-011 / P4-T1…T5)", () => {
     expect(runner.getSnapshot(taskId).result?.summary).toMatch(/published=true/);
   });
 
-  it("P2-1c: menu never appears → timeout stop, no option click", async () => {
+  it("P2-1c: menu never appears → both languages FAILED, queue continues (audit #1)", async () => {
     fixture = mountStudioFixture({
       page: "VIDEO_DETAILS",
       layout: "2026_V1",
@@ -649,19 +649,20 @@ describe("youtube.subtitle.multilang (FT-011 / P4-T1…T5)", () => {
     const taskId = await runner.start("youtube.subtitle.multilang");
     await vi.waitFor(() => {
       expect(["FAILED", "PARTIAL"]).toContain(runner.getState(taskId));
-    }, { timeout: 5_000 });
+    }, { timeout: 15_000 });
     expect(fixture.clickCounts.option).toBe(0);
     expect(fixture.clickCounts.publish).toBe(0);
     const summary = runner.getSnapshot(taskId).result?.summary ?? "";
     expect(summary).toMatch(/日本語\(ja\) FAILED/);
-    // Must not continue to second language after wait timeout
-    expect(summary).toMatch(/한국어\(ko\) CANCELLED/);
+    // audit #1 / SPEC §37: a failed language must not cancel the rest — each
+    // language fails on its own and the queue keeps going.
+    expect(summary).toMatch(/한국어\(ko\) FAILED/);
     expect(
       runner.getSnapshot(taskId).result?.warnings?.some(
         (w) => w.code === "WAIT_TIMEOUT",
       ),
     ).toBe(true);
-  });
+  }, 20_000);
 
   it("P2-2a: Chinese label 英语 maps to en — no duplicate add", async () => {
     fixture = mountStudioFixture({
@@ -800,18 +801,32 @@ describe("youtube.subtitle.multilang (FT-011 / P4-T1…T5)", () => {
     expect(fixture.clickCounts.option).toBe(1);
   });
 
-  it("does not infer empty from a timeout", async () => {
+  it("does not infer empty while the list is still loading (audit #7)", async () => {
     fixture = mountStudioFixture({ page: "VIDEO_DETAILS", subtitles: {
       existingLanguages: [], omitEmptyState: true,
     }});
     const gate = createDeferredHumanGate();
     const runner = makeRunner(createFixtureSubtitleModule(fixture), gate);
     const id = await runner.start("youtube.subtitle.multilang");
-    await vi.waitFor(() => expect(runner.getState(id)).toBe("FAILED"), { timeout: 4000 });
+    // audit #7: loading evidence keeps a zero-row list unconfirmed — elapsed
+    // time alone is never evidence of an empty list.
+    await vi.waitFor(() => {
+      const list = document.querySelector(
+        '[data-luftballons-target="subtitle.languages.list"]',
+      );
+      expect(list).not.toBeNull();
+      list!.setAttribute("aria-busy", "true");
+    });
+    await vi.waitFor(() => expect(runner.getState(id)).toBe("FAILED"), { timeout: 8000 });
     expect(fixture.clickCounts.addLanguage).toBe(0);
     expect(gate.lastAction).toBeNull();
     expect(fixture.clickCounts.publish).toBe(0);
-  });
+    const detail =
+      runner.getSnapshot(id).result?.warnings?.map((w) => w.message).join(" ") ??
+      "";
+    expect(detail).toMatch(/could not be confirmed/i);
+    expect(detail).toMatch(/fail-closed/i);
+  }, 12_000);
 
   it("stops after gate when a later language is missing from picker", async () => {
     fixture = mountStudioFixture({ page: "VIDEO_DETAILS", subtitles: {

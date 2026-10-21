@@ -330,3 +330,70 @@ describe("P2 calibration — nav targets + dashboard", () => {
     expect(el?.getAttribute("href")).toContain("/analytics/tab-overview");
   });
 });
+
+describe("H2 regression: dashboard nav from video pages", () => {
+  let fixture: StudioFixtureHandle | undefined;
+
+  afterEach(() => {
+    fixture?.destroy();
+    fixture = undefined;
+    document.body.replaceChildren();
+  });
+
+  it("resolves the drawer dashboard anchor without a channel id in href", () => {
+    fixture = mountStudioFixture({ page: "VIDEO_DETAILS" });
+    // Video-page hrefs carry no /channel/{id} — the old placeholder literal
+    // `__runtime_channel_id__` could never match (audit H2).
+    const target = navTargetFor("DASHBOARD", {
+      href: "https://studio.youtube.com/video/AbC123/edit",
+    });
+    const el = resolveDomTarget(target, document);
+    expect(el).toBeTruthy();
+    const href = el!.getAttribute("href")!;
+    expect(href).not.toContain("__runtime_channel_id__");
+    expect(href.startsWith("https://")).toBe(false);
+    expect(href).toMatch(/^\/channel\/[^/]+(\?theme=dark)?$/);
+  });
+});
+
+describe("page identity via ytcp-animatable.page.selected (family A pack §0.2)", () => {
+  afterEach(() => {
+    document.body.replaceChildren();
+  });
+
+  function mountSelected(name: string): void {
+    const app = document.createElement("ytcp-app");
+    const page = document.createElement("ytcp-animatable");
+    page.setAttribute("class", "page selected");
+    page.setAttribute("name", name);
+    app.append(page);
+    document.body.append(app);
+  }
+
+  it.each([
+    ["channel", "DASHBOARD"],
+    ["channel.content", "CONTENT"],
+    ["channel.analytics", "ANALYTICS"],
+    ["channel.translations", "SUBTITLES"],
+    ["video.edit", "VIDEO_DETAILS"],
+    ["video.translations", "SUBTITLES"],
+  ] as const)("maps %s → %s", (name, expected) => {
+    mountSelected(name);
+    expect(detectPageFromDom(document)).toBe(expected);
+  });
+
+  it("falls back to aria-current when the selected name is unknown", () => {
+    const app = document.createElement("ytcp-app");
+    const drawer = document.createElement("ytcp-navigation-drawer");
+    const link = document.createElement("a");
+    link.setAttribute("href", "/channel/UC_demo_channel/content");
+    link.setAttribute("aria-current", "page");
+    drawer.append(link);
+    const page = document.createElement("ytcp-animatable");
+    page.setAttribute("class", "page selected");
+    page.setAttribute("name", "owner.programs");
+    app.append(drawer, page);
+    document.body.append(app);
+    expect(detectPageFromDom(document)).toBe("CONTENT");
+  });
+});

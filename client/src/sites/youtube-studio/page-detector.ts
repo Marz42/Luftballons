@@ -106,6 +106,25 @@ export function detectPageFromDom(doc: Document): StudioPage {
   // collector selectors; real Studio does not expose it. Do not read it.
   // main[aria-label] — real device main has none; do not use.
 
+  // Deterministic page identity (docs/layout-family-a.md §0.2): exactly one
+  // `ytcp-animatable.page.selected` exists and its name maps to the product
+  // surface. Ambiguous/unknown names fall through to aria-current below.
+  const selected = Array.from(
+    doc.querySelectorAll("ytcp-animatable.page.selected"),
+  );
+  if (selected.length === 1) {
+    const name = (selected[0]!.getAttribute("name") ?? "").toLowerCase();
+    if (name === "channel") return "DASHBOARD";
+    if (name === "channel.content") return "CONTENT";
+    if (name === "channel.analytics" || name === "video.analytics") {
+      return "ANALYTICS";
+    }
+    if (name === "channel.translations" || name === "video.translations") {
+      return "SUBTITLES";
+    }
+    if (name === "video.edit") return "VIDEO_DETAILS";
+  }
+
   const current = doc.querySelector(
     "ytcp-navigation-drawer a[aria-current='page'], ytcp-navigation-drawer [aria-current='page']",
   );

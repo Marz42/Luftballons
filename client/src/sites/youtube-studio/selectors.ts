@@ -19,7 +19,11 @@ export function isActiveElement(el: Element): boolean {
   return true;
 }
 
-function calibrated(id: string, selectorFallback: string, matches = isActiveElement): DomTarget {
+function calibrated(
+  id: string,
+  selectorFallback: string | string[],
+  matches = isActiveElement,
+): DomTarget {
   return { id, selectorFallback, matches, unique: true };
 }
 
@@ -132,16 +136,52 @@ export function dashboardNavTarget(channelId: string): DomTarget {
 }
 
 /**
+ * Dashboard nav anchor when the channel id is not derivable from the current
+ * href (e.g. /video/{id}/…). Real device (docs/layout-family-a.md §0.3): the
+ * drawer has exactly one relative single-segment `/channel/{id}` anchor
+ * (「信息中心」). The absolute www.youtube.com outlet link must never match.
+ */
+export function dashboardNavTargetAny(): DomTarget {
+  return {
+    id: "nav.dashboard",
+    selectorFallback: ['ytcp-navigation-drawer a[href^="/channel/"]'],
+    matches: (el) => {
+      if (!isActiveElement(el)) return false;
+      const href = el.getAttribute("href") ?? "";
+      if (!href.startsWith("/channel/")) return false; // exclude absolute outlet link
+      try {
+        const pathname = new URL(href, "https://studio.youtube.com").pathname;
+        return /^\/channel\/[^/]+\/?$/i.test(pathname);
+      } catch {
+        return false;
+      }
+    },
+    unique: true,
+  };
+}
+
+/**
  * DomTargets keyed by logical id. `id` is the registry key, not an HTML id.
  */
 export const STUDIO_TARGETS = {
   "nav.dashboard": {
     id: "nav.dashboard",
     // Prefer dashboardNavTarget(channelId) at runtime (exact href path).
-    // future fallback (real device has no aria-label): ariaLabel: "Dashboard"
-    selectorFallback: [
-      'ytcp-navigation-drawer a[href="/channel/__runtime_channel_id__"]',
-    ],
+    // Without a channel id use dashboardNavTargetAny() — drawer-relative
+    // single-segment /channel/{id} anchor (never a placeholder literal).
+    selectorFallback: ['ytcp-navigation-drawer a[href^="/channel/"]'],
+    matches: (el: Element) => {
+      if (!isActiveElement(el)) return false;
+      const href = el.getAttribute("href") ?? "";
+      if (!href.startsWith("/channel/")) return false;
+      try {
+        const pathname = new URL(href, "https://studio.youtube.com").pathname;
+        return /^\/channel\/[^/]+\/?$/i.test(pathname);
+      } catch {
+        return false;
+      }
+    },
+    unique: true,
   },
   "nav.analytics": {
     id: "nav.analytics",
@@ -167,30 +207,49 @@ export const STUDIO_TARGETS = {
     // future fallback (no aria-label on real device): ariaLabel: "Subtitles"
     selectorFallback: 'ytcp-navigation-drawer a[href*="/translations"]',
   },
+  // Page-ready anchors: `ytcp-animatable.page.selected[name=…]` is the
+  // deterministic page identity on the real device (docs/layout-family-a.md
+  // §0.2); the previous selectors stay as fixture/locale fallbacks.
   "page.dashboard.title": calibrated("page.dashboard.title",
-    'ytcp-app h1.page-title[theme="DASHBOARD"], main[data-page="DASHBOARD"]'),
+    ['ytcp-animatable.page.selected[name="channel"]',
+     'ytcp-app h1.page-title[theme="DASHBOARD"]',
+     'main[data-page="DASHBOARD"]']),
   // DEFAULT theme alone is not an Analytics signature. Require its data surface.
   "page.analytics.title": calibrated("page.analytics.title",
-    'yta-time-picker #picker-trigger, main[data-page="ANALYTICS"]'),
+    ['ytcp-animatable.page.selected[name="channel.analytics"]',
+     'ytcp-animatable.page.selected[name="video.analytics"]',
+     "yta-time-picker #picker-trigger",
+     'main[data-page="ANALYTICS"]']),
   "page.content.title": {
     id: "page.content.title",
-    // calibrated: variant A has ytcp-video-section in main; variant B
-    // container unreported — fall through to main#main / main (optional).
-    selectorFallback: ["main ytcp-video-section", "main#main", "main"],
+    // calibrated: family A content hub; classic ytcp-video-section in main;
+    // fall through to main#main / main (optional).
+    selectorFallback: [
+      'ytcp-animatable.page.selected[name="channel.content"]',
+      "main ytcp-video-section",
+      "main#main",
+      "main",
+    ],
     optional: true,
   },
   "page.video_details.title": {
     id: "page.video_details.title",
-    // assumption, calibrate on real device (edit surface)
-    ariaLabel: "Video details",
-    selectorFallback: 'main[data-page="VIDEO_DETAILS"]',
+    // calibrated 2026-10-21: video.edit selected page (real device has neither
+    // aria-label="Video details" nor main[data-page]).
+    selectorFallback: [
+      'ytcp-animatable.page.selected[name="video.edit"]',
+      'main[data-page="VIDEO_DETAILS"]',
+    ],
+    matches: isActiveElement,
   },
   "page.subtitles.title": {
     id: "page.subtitles.title",
     // calibrated 2026-09-08 zh-Hans-CN: translations list table + h1「视频字幕」
     // (no English aria-label "Subtitles"; main has no data-page on real Studio)
+    // 2026-10-21: selected page name video.translations is the stable anchor.
     text: "视频字幕",
     selectorFallback: [
+      'ytcp-animatable.page.selected[name="video.translations"]',
       "#ytgn-video-translations-list-table",
       'main[data-page="SUBTITLES"]', // fixture-only helper
     ],
@@ -550,7 +609,9 @@ export function navTargetFor(
       if (channelId) {
         return dashboardNavTarget(channelId);
       }
-      return STUDIO_TARGETS["nav.dashboard"];
+      // No channel id in the current href (e.g. video pages) — derive the
+      // dashboard anchor from the drawer instead of a never-matching literal.
+      return dashboardNavTargetAny();
     }
     case "ANALYTICS":
       return STUDIO_TARGETS["nav.analytics"];

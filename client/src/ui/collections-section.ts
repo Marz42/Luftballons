@@ -16,6 +16,11 @@ function formatSummaryLine(row: CollectionSummary): string {
   return `${row.capturedAt} · ${row.collector} · ${row.status} · ${count}`;
 }
 
+function formatWarnings(row: CollectionSummary): string {
+  if (!row.warnings || row.warnings.length === 0) return "";
+  return row.warnings.map((w) => `[${w.code}] ${w.message}`).join("; ");
+}
+
 export interface CollectionsSectionHandle {
   refresh(): Promise<void>;
   root: HTMLElement;
@@ -162,7 +167,16 @@ export function createCollectionsSection(
       });
 
       actions.append(exportCsv, exportJson, syncBtn, deleteBtn);
-      block.append(meta, actions);
+      const warnLine = formatWarnings(row);
+      if (warnLine) {
+        const warnBox = document.createElement("div");
+        warnBox.className = "lb-collection-warnings";
+        warnBox.setAttribute("data-collection-warnings", "true");
+        text(warnBox, warnLine);
+        block.append(meta, warnBox, actions);
+      } else {
+        block.append(meta, actions);
+      }
       fragment.appendChild(block);
     }
     listBox.appendChild(fragment);

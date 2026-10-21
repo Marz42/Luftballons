@@ -106,7 +106,10 @@ export function createNavigationService(
     options.getHref ??
     (() => (typeof location !== "undefined" ? location.href : ""));
   const setHref = options.setHref;
-  const defaultTimeoutMs = options.defaultTimeoutMs ?? 5_000;
+  // 2026-10-21 live: cold SPA transitions (e.g. first Analytics render) can
+  // exceed 5s and caused flaky `waitReady timed out` failures. Budget covers
+  // cold renders while staying fail-closed on a bounded deadline.
+  const defaultTimeoutMs = options.defaultTimeoutMs ?? 15_000;
   const historyStack: StudioTarget[] = [];
 
   const currentPage = (): StudioPage => {

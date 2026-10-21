@@ -12,6 +12,8 @@ import { abortableDelay } from "../../../../modules/step-control.js";
 import {
   createDomService,
   querySelectorAllDeep,
+  DomNotFoundError,
+  DomTimeoutError,
   type CancellableDomService,
   type DomTarget,
 } from "../../../../services/dom-service.js";
@@ -405,6 +407,21 @@ function rowStateFromElement(el: Element): SubtitleRowState {
   return "UNPARSEABLE";
 }
 
+/**
+ * Table header rows must never be parsed as data rows.
+ * audit #6 (2026-10-21): `/^语言\b/` never fires on Chinese — \b is an ASCII
+ * word boundary and「语言」ends with a CJK character
+ * (`/^语言\b/.test("语言") === false`, verified). Use exact / CJK-safe
+ * boundary matching instead.
+ */
+export function isLanguageHeaderRowLabel(label: string): boolean {
+  const t = label.replace(/\s+/g, " ").trim();
+  if (!t) {
+    return false;
+  }
+  return t === "语言" || /^语言(?![\p{L}\p{N}])/u.test(t);
+}
+
 function collectRowElements(list: Element): Element[] {
   const seen = new Set<Element>();
   const rows: Element[] = [];
@@ -414,7 +431,7 @@ function collectRowElements(list: Element): Element[] {
       return;
     }
     const label = (el.textContent ?? "").replace(/\s+/g, " ").trim();
-    if (!label || /^语言\b/.test(label)) {
+    if (!label || isLanguageHeaderRowLabel(label)) {
       return;
     }
     seen.add(el);
@@ -552,12 +569,52 @@ export async function readExistingLanguages(
   return rows.map((r) => r.code);
 }
 
+/**
+ * Loading chrome that keeps a zero-row list "unconfirmed" (audit #7).
+ * A list that is still loading must never be read as a confirmed empty state.
+ */
+function listShowsLoadingChrome(list: Element): boolean {
+  if (list.getAttribute("aria-busy") === "true") {
+    return true;
+  }
+  for (const el of list.querySelectorAll(
+    [
+      '[aria-busy="true"]',
+      '[role="progressbar"]',
+      "tp-yt-paper-spinner",
+      ".loading-spinner",
+      '[class*="spinner"]',
+      '[class*="Spinner"]',
+      '[class*="progress"]',
+      '[class*="Progress"]',
+    ].join(", "),
+  )) {
+    if (!isActiveElement(el) || (el as HTMLElement).hidden) {
+      continue;
+    }
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Explicit empty confirmation, without guessing (audit #7).
+ * (b) fixture marker `data-subtitle-list-state="EMPTY"` (calibrated test
+ * simulation only), and never while the container reports busy.
+ */
 async function hasConfirmedEmptyList(dom: CancellableDomService): Promise<boolean> {
   const list = await dom.find(getSubtitleTarget("subtitle.languages.list"));
-  // Assumption marker until a real Studio empty-state signal is calibrated.
-  return list?.getAttribute("data-subtitle-list-state") === "EMPTY" &&
-    list.getAttribute("aria-busy") !== "true";
+  if (!list) {
+    return false;
+  }
+  if (list.getAttribute("aria-busy") === "true") {
+    return false;
+  }
+  return list.getAttribute("data-subtitle-list-state") === "EMPTY";
 }
+
+/** audit #7(a): two consecutive sampling periods of clean zero-row evidence. */
+const EMPTY_SAMPLING_PERIOD_MS = 500;
 
 async function waitForLanguageListSettled(
   dom: CancellableDomService,
@@ -567,21 +624,55 @@ async function waitForLanguageListSettled(
 ): Promise<LanguageListParseResult | { kind: "MISSING" }> {
   throwIfAborted(signal);
   const first = await parseLanguageList(dom);
-  if (first.kind !== "EMPTY" || await hasConfirmedEmptyList(dom)) {
+  if (first.kind !== "EMPTY" || (await hasConfirmedEmptyList(dom))) {
     return first;
   }
 
   const deadline = Date.now() + emptySettleMs;
   let last: LanguageListParseResult | { kind: "MISSING" } = first;
+  /** Start of the current uninterrupted clean-empty observation, if any. */
+  let cleanEmptySince: number | null = null;
+  let cleanSamples = 0;
   while (Date.now() <= deadline) {
     throwIfAborted(signal);
     await abortableDelay(20, signal);
     last = await parseLanguageList(dom);
-    if (last.kind !== "EMPTY" || await hasConfirmedEmptyList(dom)) {
+    if (last.kind !== "EMPTY") {
       return last;
     }
+    if (await hasConfirmedEmptyList(dom)) {
+      return last;
+    }
+    const list = await dom.find(getSubtitleTarget("subtitle.languages.list"));
+    const cleanEmpty =
+      !!list &&
+      list.getAttribute("aria-busy") !== "true" &&
+      !listShowsLoadingChrome(list);
+    if (!cleanEmpty) {
+      // Loading evidence — restart the clean observation window.
+      cleanEmptySince = null;
+      cleanSamples = 0;
+      continue;
+    }
+    const now = Date.now();
+    cleanEmptySince ??= now;
+    cleanSamples += 1;
+    // audit #7(a): real empty-state signal — container present, not busy,
+    // zero rows and no loading chrome across two consecutive sampling periods.
+    if (
+      cleanSamples >= 2 &&
+      now - cleanEmptySince >= EMPTY_SAMPLING_PERIOD_MS * 2
+    ) {
+      return { kind: "EMPTY", rows: [] };
+    }
   }
-  return { kind: "UNPARSEABLE", rows: [], detail: "Language list never confirmed loading complete/empty" };
+  // audit #7(c): cannot confirm empty — fail closed, but say exactly why.
+  return {
+    kind: "UNPARSEABLE",
+    rows: [],
+    detail:
+      "Language list showed zero rows for the settle window but empty state could not be confirmed (loading indicators/aria-busy persisted or clean samples did not accumulate) — refusing to treat as empty (fail-closed)",
+  };
 }
 
 async function findUniqueLanguageRow(
@@ -813,7 +904,7 @@ async function findLanguageOption(
   );
 }
 
-class UiMismatchError extends Error {
+export class UiMismatchError extends Error {
   readonly code = "UI_MISMATCH";
   constructor(message: string) {
     super(message);
@@ -821,11 +912,27 @@ class UiMismatchError extends Error {
   }
 }
 
-class WaitTimeoutError extends Error {
+export class WaitTimeoutError extends Error {
   readonly code = "WAIT_TIMEOUT";
   constructor(message: string) {
     super(message);
     this.name = "WaitTimeoutError";
+  }
+}
+
+/**
+ * Video identity / page binding lost (assertBinding failure).
+ * Global stop: never fall back to page-level clicks after this (audit #2).
+ */
+export class VideoBindingError extends Error {
+  readonly code: "VIDEO_SWITCHED" | "NAV_BINDING_FAILED";
+  constructor(
+    code: "VIDEO_SWITCHED" | "NAV_BINDING_FAILED",
+    message: string,
+  ) {
+    super(message);
+    this.name = "VideoBindingError";
+    this.code = code;
   }
 }
 
@@ -877,9 +984,34 @@ async function waitPickerClosed(
 type CaptionsEntrySurface = "list_row_hover" | "manual_dialog";
 
 /**
- * After picker option click: Layout A → list row; Layout B → 手动字幕 dialog.
+ * Language binding evidence for a manual-captions control (Layout B).
+ * audit #2/#4 (2026-10-21): the 手动字幕→Add control may belong to another
+ * language or to a leftover dialog — it may only be clicked / returned as an
+ * entry surface when its host is provably bound to the target language.
  */
-async function waitCaptionsEntrySurface(
+export function manualControlLanguageBinding(
+  control: Element,
+  lang: SubtitleLanguage,
+): "match" | "mismatch" | "unknown" {
+  const host =
+    control.closest(
+      "tr.manual-subtitles-row, [data-language-code], [data-luftballons-subtitle-lang], ytcp-language-item, [data-luftballons-target='subtitle.editor']",
+    ) ??
+    control.closest("#language-details-text-button-subtitles")?.parentElement ??
+    control.closest("ytcp-uploads-dialog, tp-yt-paper-dialog") ??
+    control.parentElement;
+  if (!host) {
+    return "unknown";
+  }
+  return editorLanguageBinding(host, lang);
+}
+
+/**
+ * After picker option click: Layout A → list row; Layout B → 手动字幕 dialog.
+ * audit #4: manual_dialog is only accepted when the manual control's host is
+ * language-bound to `lang`; mismatch throws, unproven keeps waiting.
+ */
+export async function waitCaptionsEntrySurface(
   dom: CancellableDomService,
   editorDom: CancellableDomService,
   lang: SubtitleLanguage,
@@ -887,10 +1019,23 @@ async function waitCaptionsEntrySurface(
 ): Promise<CaptionsEntrySurface> {
   const deadline = Date.now() + 5_000;
   const manual = getSubtitleTarget("subtitle.manual_captions_add");
+  let manualUnprovenSeen = false;
   while (Date.now() <= deadline) {
     throwIfAborted(signal);
-    if ((await dom.exists(manual)) || (await editorDom.exists(manual))) {
-      return "manual_dialog";
+    const manualControl =
+      (await dom.find(manual)) ?? (await editorDom.find(manual));
+    if (manualControl) {
+      const binding = manualControlLanguageBinding(manualControl, lang);
+      if (binding === "match") {
+        return "manual_dialog";
+      }
+      if (binding === "mismatch") {
+        throw new UiMismatchError(
+          `手动字幕 Add control is bound to another language; refusing manual_dialog for ${lang.code}`,
+        );
+      }
+      // Unknown binding — keep waiting for language evidence, never click blind.
+      manualUnprovenSeen = true;
     }
     const list =
       (await dom.find(getSubtitleTarget("subtitle.languages.list"))) ??
@@ -926,6 +1071,11 @@ async function waitCaptionsEntrySurface(
       }
     }
     await abortableDelay(40, signal);
+  }
+  if (manualUnprovenSeen) {
+    throw new UiMismatchError(
+      `手动字幕 Add control appeared but is not provably bound to ${lang.code}; refusing manual_dialog`,
+    );
   }
   throw new WaitTimeoutError(
     `Neither list row nor 手动字幕 dialog appeared after selecting ${lang.code}`,
@@ -1142,8 +1292,60 @@ async function hoverCaptionsCellAndAct(
 }
 
 /**
+ * Two-letter code aliases (en/de/es/ar/…) are never text evidence (audit #3):
+ * as substrings they hit ordinary words (Content/Settings/…) and mis-bind.
+ */
+function isShortCodeAlias(alias: string): boolean {
+  return alias.length <= 2 && /^[a-z]+$/i.test(alias);
+}
+
+/** Aliases usable as text evidence for language binding. */
+function isUsableTextAlias(alias: string): boolean {
+  return alias.trim().length >= 2 && !isShortCodeAlias(alias.trim());
+}
+
+function isBoundaryWordChar(ch: string): boolean {
+  return ch !== "" && /[\p{L}\p{N}]/u.test(ch);
+}
+
+/**
+ * Word-boundary alias match (audit #3) — never bare `includes`.
+ * ASCII aliases need ASCII-word boundaries; non-ASCII (CJK etc.) names need
+ * letter/digit boundaries of any script (so「日语」matches「日语 （视频语言）」
+ * but not「字幕日语编辑器」).
+ */
+export function aliasMatchesText(text: string, alias: string): boolean {
+  const a = alias.trim();
+  if (!isUsableTextAlias(a)) {
+    return false;
+  }
+  const hay = text.replace(/\s+/g, " ");
+  const lowerHay = hay.toLowerCase();
+  const lowerAlias = a.toLowerCase();
+  const asciiAlias = /^[\x20-\x7e]+$/.test(a);
+  let idx = lowerHay.indexOf(lowerAlias);
+  while (idx >= 0) {
+    const before = idx > 0 ? hay.charAt(idx - 1) : "";
+    const after = idx + a.length < hay.length ? hay.charAt(idx + a.length) : "";
+    const beforeOk = asciiAlias ? !/[\w]/.test(before) : !isBoundaryWordChar(before);
+    const afterOk = asciiAlias ? !/[\w]/.test(after) : !isBoundaryWordChar(after);
+    if (beforeOk && afterOk) {
+      return true;
+    }
+    idx = lowerHay.indexOf(lowerAlias, idx + 1);
+  }
+  return false;
+}
+
+/**
  * Editor language binding: match | mismatch | unknown.
  * Editors without lang attrs/title evidence are unknown (fail-closed).
+ *
+ * audit #3 (2026-10-21):
+ * - match requires EVERY observed code to equal the target (a single foreign
+ *   code alongside the target is a mismatch — the old code ignored extras);
+ * - alias evidence uses word-boundary matching, never bare substring, and
+ *   two-letter code aliases (en/de/es/ar…) never count as text evidence.
  */
 export function editorLanguageBinding(
   root: Element,
@@ -1166,16 +1368,11 @@ export function editorLanguageBinding(
   }
   const want = lang.code.toLowerCase();
   if (codes.size > 0) {
-    if (codes.has(want) && [...codes].every((c) => c === want)) {
-      return "match";
-    }
-    if (codes.has(want)) {
-      return "match";
-    }
-    return "mismatch";
+    // All observed codes must be the target code — nothing else (audit #3).
+    return [...codes].every((c) => c === want) ? "match" : "mismatch";
   }
 
-  const aliases = labelAliasesForLanguage(lang).filter((a) => a.length >= 2);
+  const aliases = labelAliasesForLanguage(lang).filter(isUsableTextAlias);
   const headerBits = [
     root.getAttribute("aria-label") ?? "",
     root.getAttribute("title") ?? "",
@@ -1189,7 +1386,7 @@ export function editorLanguageBinding(
   if (!hay) {
     return "unknown";
   }
-  const selfHit = aliases.some((a) => hay.includes(a));
+  const selfHit = aliases.some((a) => aliasMatchesText(hay, a));
   if (selfHit) {
     return "match";
   }
@@ -1203,12 +1400,15 @@ export function editorLanguageBinding(
     { code: "es", label: "Español" },
     { code: "ar", label: "العربية" },
     { code: "zh-Hans", label: "中文（简体）" },
+    { code: "zh-Hant", label: "中文（繁体）" },
   ] as SubtitleLanguage[]) {
     if (other.code.toLowerCase() === want) {
       continue;
     }
-    const otherAliases = labelAliasesForLanguage(other).filter((a) => a.length >= 2);
-    if (otherAliases.some((a) => hay.includes(a))) {
+    const otherAliases = labelAliasesForLanguage(other).filter(
+      isUsableTextAlias,
+    );
+    if (otherAliases.some((a) => aliasMatchesText(hay, a))) {
       return "mismatch";
     }
   }
@@ -1359,9 +1559,21 @@ async function revealAndClickCaptionsAdd(
       const fallbackDeadline = Date.now() + 2_500;
       while (Date.now() <= fallbackDeadline) {
         throwIfAborted(signal);
-        if (await dom.exists(manual)) {
-          await clickManualCaptionsAdd(dom, signal);
-          return;
+        // audit #2: never click a manual Add control without language proof —
+        // it may belong to another language or to a leftover dialog.
+        const manualControl = await dom.find(manual);
+        if (manualControl) {
+          const binding = manualControlLanguageBinding(manualControl, lang);
+          if (binding === "mismatch") {
+            throw new UiMismatchError(
+              `手动字幕 Add control is bound to another language; refusing fallback for ${lang.code}`,
+            );
+          }
+          if (binding === "match") {
+            await clickManualCaptionsAdd(dom, signal);
+            return;
+          }
+          // Unknown binding — keep waiting for language evidence.
         }
         if (await dom.exists(auto)) {
           const open = await captionsEditorEntryOpenForLang(dom, lang);
@@ -1484,6 +1696,48 @@ async function clickManualCaptionsAdd(
     throw new WaitTimeoutError("手动字幕 Add control did not appear");
   }
   await dom.click(target);
+}
+
+/**
+ * SPEC §3.4 / audit #2 (2026-10-21): the blind catch-and-click of the
+ * page-level 手动字幕→Add control is removed. Fallback is allowed ONLY when
+ * the failure is genuinely "control not visible / not found" AND the manual
+ * control is afterwards proven bound to `lang` (manualControlLanguageBinding
+ * === "match"). VIDEO_SWITCHED / UI mismatch / assertion failures rethrow as-is.
+ */
+export async function fallbackToManualCaptionsAdd(
+  dom: CancellableDomService,
+  lang: SubtitleLanguage,
+  signal: AbortSignal,
+  error: unknown,
+): Promise<void> {
+  if (isAbortError(error) || signal.aborted) {
+    throw error;
+  }
+  // Binding loss and UI mismatches must surface directly — never mask them.
+  if (error instanceof VideoBindingError || error instanceof UiMismatchError) {
+    throw error;
+  }
+  // Only "control not visible / not found" failures may fall back.
+  const controlMissing =
+    error instanceof WaitTimeoutError ||
+    error instanceof DomNotFoundError ||
+    error instanceof DomTimeoutError;
+  if (!controlMissing) {
+    throw error;
+  }
+  const control = await dom.find(getSubtitleTarget("subtitle.manual_captions_add"));
+  if (!control) {
+    // No manual control either — keep the original failure.
+    throw error;
+  }
+  const binding = manualControlLanguageBinding(control, lang);
+  if (binding !== "match") {
+    throw new UiMismatchError(
+      `Page-level 手动字幕 fallback refused for ${lang.code}: manual control language binding is ${binding}`,
+    );
+  }
+  await clickManualCaptionsAdd(dom, signal);
 }
 
 /**
@@ -1983,8 +2237,9 @@ function buildResult(
 ): TaskResult {
   const line = formatOutcomesSummary(summary.outcomes);
   if (summary.humanRejected) {
+    // audit #5 (2026-10-21): a rejected WRITE_COMMIT is CANCELLED, not COMPLETED.
     return {
-      status: "COMPLETED",
+      status: "CANCELLED",
       summary: `Publish skipped (Human Gate REJECTED). video=${summary.videoId}; ${line}`,
       warnings: [
         ...warnings,
@@ -2082,7 +2337,8 @@ export async function runSubtitleMultilangWorkflow(
 
   const assertBinding = (): void => {
     const check = recheckVideoBinding(deps, videoId);
-    if (!check.ok) throw new UiMismatchError(check.message);
+    // audit #2: binding loss is a global stop signal, not a soft UI mismatch.
+    if (!check.ok) throw new VideoBindingError(check.code, check.message);
   };
 
   // 2) navigate to subtitles (video-scoped target via NavigationService)
@@ -2303,8 +2559,9 @@ export async function runSubtitleMultilangWorkflow(
             assertBinding,
             ctx.humanGate,
           );
-        } catch {
-          await clickManualCaptionsAdd(deps.dom, ctx.signal);
+        } catch (error) {
+          // audit #2: binding-gated fallback only (no blind page-level click).
+          await fallbackToManualCaptionsAdd(deps.dom, lang, ctx.signal, error);
         }
         await autoTranslateAndPublish(
           deps.dom,
@@ -2332,8 +2589,9 @@ export async function runSubtitleMultilangWorkflow(
               assertBinding,
               ctx.humanGate,
             );
-          } catch {
-            await clickManualCaptionsAdd(deps.dom, ctx.signal);
+          } catch (error) {
+            // audit #2: binding-gated fallback only (no blind page-level click).
+            await fallbackToManualCaptionsAdd(deps.dom, lang, ctx.signal, error);
           }
         }
         let phase = await classifyTranslatePhase(deps.dom, lang);
@@ -2414,6 +2672,24 @@ export async function runSubtitleMultilangWorkflow(
       if (isAbortError(error) || ctx.signal.aborted) {
         throw error;
       }
+      if (error instanceof VideoBindingError) {
+        // Global stop (audit #1/#2): video switched / binding lost — the whole
+        // queue ends; remaining languages are CANCELLED, never guessed at.
+        for (const rest of workQueue.slice(i + 1)) {
+          outcomes.push({
+            code: rest.lang.code,
+            label: rest.lang.label,
+            status: "CANCELLED",
+            detail: `Stopped: video binding failed (${error.code})`,
+          });
+        }
+        return bindingFailureResult(
+          videoId,
+          { code: error.code, message: error.message },
+          warnings,
+          outcomes,
+        );
+      }
       const message =
         error instanceof Error ? error.message : "language write failed";
       const code =
@@ -2429,19 +2705,10 @@ export async function runSubtitleMultilangWorkflow(
         detail: message,
       });
       warnings.push({ code, message: `${lang.code}: ${message}` });
-      for (const rest of workQueue.slice(i + 1)) {
-        outcomes.push({
-          code: rest.lang.code,
-          label: rest.lang.label,
-          status: "CANCELLED",
-          detail: "Stopped after prior language wait/UI failure",
-        });
-      }
-      return {
-        status: "FAILED",
-        summary: `Subtitle workflow stopped; pending changes retained. ${formatOutcomesSummary(outcomes)}`,
-        warnings,
-      };
+      // audit #1 / SPEC §37 (2026-10-21): a single-language failure must NOT
+      // abort the queue — record FAILED and continue with the rest. The final
+      // buildResult turns mixed success/failure into PARTIAL and all-failed
+      // into FAILED.
     }
   }
 

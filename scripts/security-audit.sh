@@ -48,6 +48,14 @@
 
 set -euo pipefail
 
+# Fail closed: every rule below is enforced with ripgrep. If `rg` is missing the
+# helpers would swallow the error and every check would pass vacuously
+# (observed 2026-10-21 in a rg-less environment) — refuse to run instead.
+if ! command -v rg >/dev/null 2>&1; then
+  echo "security-audit: FAIL — ripgrep (rg) is required but not on PATH; refusing to pass vacuously" >&2
+  exit 1
+fi
+
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SRC="$ROOT/client/src"
 DIST="$ROOT/client/dist/Luftballons.user.js"

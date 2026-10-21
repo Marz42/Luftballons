@@ -117,6 +117,9 @@ function toSummary(collection: Collection<unknown>): CollectionSummary {
   if (itemCount !== undefined) {
     summary.itemCount = itemCount;
   }
+  if (collection.warnings !== undefined && collection.warnings.length > 0) {
+    summary.warnings = collection.warnings;
+  }
   return summary;
 }
 

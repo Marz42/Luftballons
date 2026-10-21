@@ -101,13 +101,14 @@ describe("TaskContext.collections injection", () => {
   });
 
   it("maps PARTIAL collection status to TaskResult PARTIAL", async () => {
-    // Collector v2: Dashboard views readable + Analytics metrics missing (em dash)
-    // → preserve Dashboard summary, missing subscriberDelta → PARTIAL (fast path).
-    // (omitVideoList no longer works as a quick PARTIAL: content waitFor is ~5s.)
+    // Genuine PARTIAL: core field channelName unreadable (CHANNEL_NAME_MISSING).
+    // (2026-10-21 semantics: a metric the UI shows as 「—」/empty — e.g.
+    // subscriberDelta — is legitimately absent and no longer poisons status;
+    // see the companion test below.)
     fixture = mountStudioFixture({
       layout: "2026_V1",
       collector: {
-        channelName: "Partial Via Fixture",
+        channelName: "",
         periodLabel: "Last 28 days",
         dashboardViews: "100",
         analyticsViews: "—",
@@ -136,6 +137,44 @@ describe("TaskContext.collections injection", () => {
     const taskId = await runner.start("youtube.channel.basic");
     await vi.waitFor(() => {
       expect(runner.getState(taskId)).toBe("PARTIAL");
+    });
+  });
+
+  it("UI-absent metrics (「—」) map to COMPLETED, not permanent PARTIAL", async () => {
+    // Audit H5: em dash = "the UI shows no value" (SPEC §15 optional field),
+    // not bad data. Core fields present + placeholder subscriberDelta → COMPLETE.
+    fixture = mountStudioFixture({
+      layout: "2026_V1",
+      collector: {
+        channelName: "Placeholder Tolerant",
+        periodLabel: "Last 28 days",
+        dashboardViews: "100",
+        analyticsViews: "—",
+        analyticsSubscriberDelta: "—",
+        recentVideos: [
+          {
+            videoId: "vid_placeholder",
+            title: "Placeholder video",
+            publishedAt: "2026-09-01",
+            viewsText: "10",
+          },
+        ],
+      },
+    });
+    const module = createFixtureChannelModule(fixture);
+    const registry = new ModuleRegistry();
+    registry.register(module);
+    const runner = new TaskRunner({
+      registry,
+      logger: silentLogger(),
+      getLocation: () => ({
+        hostname: "studio.youtube.com",
+        href: fixture!.href,
+      }),
+    });
+    const taskId = await runner.start("youtube.channel.basic");
+    await vi.waitFor(() => {
+      expect(runner.getState(taskId)).toBe("COMPLETED");
     });
   });
 

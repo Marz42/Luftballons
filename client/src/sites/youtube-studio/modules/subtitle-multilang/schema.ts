@@ -136,11 +136,18 @@ export interface SubtitleMultilangSummary {
  *
  * zh-Hans Studio picker/table uses Chinese names (日语 / 韩语 / …); native
  * and English labels remain for fixtures and other locales.
+ *
+ * audit #15 (2026-10-21): unmapped row labels make the WHOLE list UNPARSEABLE
+ * and fail the task — so cover the common Studio catalog (en + zh names).
+ * Bare「中文」/`Chinese` is intentionally NOT mapped: the picker carries seven
+ * zh variants (zh / zh-Hans / zh-Hant / zh-CN / zh-TW / zh-HK / zh-SG,
+ * docs/layout-family-a.md §4) and guessing one would violate fail-closed.
  */
 export const SUBTITLE_LABEL_TO_CODE: Readonly<Record<string, string>> = {
   English: "en",
   英语: "en",
   日本語: "ja",
+  Japanese: "ja",
   /** zh-Hans Studio picker / table label (2026-09-08). */
   日语: "ja",
   한국어: "ko",
@@ -164,7 +171,41 @@ export const SUBTITLE_LABEL_TO_CODE: Readonly<Record<string, string>> = {
   葡萄牙语: "pt",
   Portuguese: "pt",
   "中文（简体）": "zh-Hans",
+  "Chinese (Simplified)": "zh-Hans",
+  "中文(简体)": "zh-Hans",
   "中文（繁体）": "zh-Hant",
+  "Chinese (Traditional)": "zh-Hant",
+  "中文(繁体)": "zh-Hant",
+  Hindi: "hi",
+  印地语: "hi",
+  Italian: "it",
+  Italiano: "it",
+  意大利语: "it",
+  Russian: "ru",
+  Русский: "ru",
+  俄语: "ru",
+  Vietnamese: "vi",
+  越南语: "vi",
+  Thai: "th",
+  ไทย: "th",
+  泰语: "th",
+  Turkish: "tr",
+  Türkçe: "tr",
+  土耳其语: "tr",
+  Indonesian: "id",
+  印度尼西亚语: "id",
+  印尼语: "id",
+  Polish: "pl",
+  Polski: "pl",
+  波兰语: "pl",
+  Dutch: "nl",
+  Nederlands: "nl",
+  荷兰语: "nl",
+  /** Studio catalogs distinguish pt-BR from generic pt. */
+  "Portuguese (Brazil)": "pt-BR",
+  "Português (Brasil)": "pt-BR",
+  "葡萄牙语（巴西）": "pt-BR",
+  "葡萄牙语(巴西)": "pt-BR",
 };
 
 /** Preferred picker search / display aliases per code (zh-Hans first). */
@@ -212,8 +253,61 @@ export function labelAliasesForLanguage(lang: SubtitleLanguage): string[] {
       aliases.add("Português");
       aliases.add("Portuguese");
       break;
+    case "pt-br":
+      aliases.add("葡萄牙语（巴西）");
+      aliases.add("Português (Brasil)");
+      aliases.add("Portuguese (Brazil)");
+      break;
     case "zh-hans":
       aliases.add("中文（简体）");
+      aliases.add("Chinese (Simplified)");
+      break;
+    case "zh-hant":
+      aliases.add("中文（繁体）");
+      aliases.add("Chinese (Traditional)");
+      break;
+    case "hi":
+      aliases.add("印地语");
+      aliases.add("Hindi");
+      break;
+    case "it":
+      aliases.add("意大利语");
+      aliases.add("Italian");
+      aliases.add("Italiano");
+      break;
+    case "ru":
+      aliases.add("俄语");
+      aliases.add("Russian");
+      aliases.add("Русский");
+      break;
+    case "vi":
+      aliases.add("越南语");
+      aliases.add("Vietnamese");
+      break;
+    case "th":
+      aliases.add("泰语");
+      aliases.add("Thai");
+      aliases.add("ไทย");
+      break;
+    case "tr":
+      aliases.add("土耳其语");
+      aliases.add("Turkish");
+      aliases.add("Türkçe");
+      break;
+    case "id":
+      aliases.add("印度尼西亚语");
+      aliases.add("印尼语");
+      aliases.add("Indonesian");
+      break;
+    case "pl":
+      aliases.add("波兰语");
+      aliases.add("Polish");
+      aliases.add("Polski");
+      break;
+    case "nl":
+      aliases.add("荷兰语");
+      aliases.add("Dutch");
+      aliases.add("Nederlands");
       break;
     default:
       break;
@@ -233,7 +327,18 @@ export function pickerFilterQueryForLanguage(lang: SubtitleLanguage): string {
     de: "德语",
     ar: "阿拉伯语",
     pt: "葡萄牙语",
+    "pt-br": "葡萄牙语（巴西）",
     "zh-hans": "中文（简体）",
+    "zh-hant": "中文（繁体）",
+    hi: "印地语",
+    it: "意大利语",
+    ru: "俄语",
+    vi: "越南语",
+    th: "泰语",
+    tr: "土耳其语",
+    id: "印度尼西亚语",
+    pl: "波兰语",
+    nl: "荷兰语",
   };
   return zh[code] ?? (lang.label.replace(/\s+/g, " ").trim() || lang.code);
 }

@@ -5,6 +5,12 @@
 
 export type CollectionStatus = "COMPLETE" | "PARTIAL";
 
+/** Persisted warning (same shape as runtime TaskWarning; kept decoupled). */
+export interface CollectionWarning {
+  code: string;
+  message: string;
+}
+
 export interface Collection<T> {
   collectionId: string;
   installationId: string;
@@ -15,6 +21,8 @@ export interface Collection<T> {
   capturedAt: string;
   status: CollectionStatus;
   data: T;
+  /** Optional diagnostics — e.g. why the run is PARTIAL (observability). */
+  warnings?: CollectionWarning[];
 }
 
 export interface CollectionSummary {
@@ -27,6 +35,7 @@ export interface CollectionSummary {
   status: CollectionStatus;
   /** Brief overview (e.g. recentVideos length for channel.basic). */
   itemCount?: number;
+  warnings?: CollectionWarning[];
 }
 
 export interface CollectionFilter {

@@ -38,7 +38,8 @@ async function collect(options: { views?: string; delta?: string; dates?: string
   const controller = new AbortController();
   const ctx = {
     signal: controller.signal,
-    logger: { info() {} },
+    logger: { info() {}, warn() {}, error() {}, debug() {} },
+    setProgress() {},
     collections: { async save(value: Collection<ChannelBasicData>) { saved.push(value); } },
   } as unknown as TaskContext;
   let page: StudioTarget = "DASHBOARD";
@@ -82,7 +83,7 @@ describe("real DOM calibration", () => {
     const { data, result } = await collect({ delayed: true });
     expect(data.recentVideos).toHaveLength(1);
     expect(data.recentVideos[0]?.views).toBe(2);
-    expect(result.warnings?.some(w => w.code === "CONTENT_LOAD_TIMEOUT")).toBe(false);
+    expect((result.warnings ?? []).some(w => w.code === "CONTENT_LOAD_TIMEOUT")).toBe(false);
   });
 
   it("preserves summary on content timeout", async () => {
@@ -100,12 +101,15 @@ describe("real DOM calibration", () => {
   });
   it("retains zero, omits missing net change, ignores tooltip and 48-hour period", async () => {
     const { result, data } = await collect();
-    expect(result.status).toBe("PARTIAL");
+    // 2026-10-21 semantics (audit H5): a metric the UI shows as 「—」/empty is
+    // legitimately absent (SPEC §15 optional field), not a collection failure —
+    // status stays COMPLETE instead of being poisoned into permanent PARTIAL.
+    expect(result.status).toBe("COMPLETED");
     expect(data.channel.channelName).toBe("Demo Channel");
     expect(data.period).toEqual({ label: "过去 28 天" });
     expect(data.summary).toEqual({ views: 0 });
     expect(data.recentVideos[0]).toMatchObject({ videoId: "demo_video", title: "Demo video", views: 2, publishedAt: "2026年9月7日" });
-    expect(result.warnings?.some(w => w.code === "VIDEO_SCOPE_PARTIAL")).toBe(false);
+    expect((result.warnings ?? []).some(w => w.code === "VIDEO_SCOPE_PARTIAL")).toBe(false);
   });
 
   it("uses Analytics as a single source, including its exact dates", async () => {
