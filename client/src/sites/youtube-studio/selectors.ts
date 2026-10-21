@@ -19,6 +19,20 @@ export function isActiveElement(el: Element): boolean {
   return true;
 }
 
+/**
+ * Content-presence check for virtualized lists (2026-10-21 live):
+ * `tp-yt-iron-list` hides offscreen items via computed styles while their
+ * content is fully loaded — readiness evidence must not be discarded for
+ * viewport placement. Honors attribute hiding and retained SPA pages only.
+ */
+export function isLoadedContent(el: Element): boolean {
+  for (let node: Element | null = el; node; node = node.parentElement) {
+    if (node.hasAttribute("hidden") || node.getAttribute("aria-hidden") === "true") return false;
+    if (node.matches("ytcp-animatable.page:not(.selected)")) return false;
+  }
+  return true;
+}
+
 function calibrated(
   id: string,
   selectorFallback: string | string[],

@@ -21,6 +21,7 @@ import type { CancellableNavigationService } from "../../navigation.js";
 import { NavigationError } from "../../navigation.js";
 import { detectStudio } from "../../page-detector.js";
 import {
+  isLoadedContent,
   extractVideoIdFromHref,
   getSubtitleTarget,
   isActiveElement,
@@ -1776,18 +1777,31 @@ function activeCaptionsEditorRoot(lang: SubtitleLanguage): Element | null {
  * If no editor chrome yet (post-add options), allow page-level actions only when
  * no open editor is mismatched/unknown for `lang`.
  */
+const PUBLISH_CONTROL_SELECTOR = [
+  '[data-luftballons-target="subtitle.publish"]',
+  "ytcp-button#publish-button",
+  'button[aria-label="发布"]',
+  'button[aria-label="Publish"]',
+].join(", ");
+
 function actionDomForLanguage(
   dom: CancellableDomService,
   lang: SubtitleLanguage,
 ): CancellableDomService {
   const root = activeCaptionsEditorRoot(lang);
   if (root) {
-    const hasActions =
-      root.querySelector(
-        '[data-luftballons-target="subtitle.auto_translate"], #choose-auto-translate, [data-luftballons-target="subtitle.publish"], button[aria-label="发布"], button[aria-label="Publish"]',
-      ) !== null;
-    if (hasActions) {
+    // Live 2026-10-21: the PUBLISH control lives OUTSIDE the options panel
+    // (`ytcp-button#publish-button` in #save-container / #secondary-header of
+    // the editor dialog). Scoping actions to the panel alone made waitFor
+    // (publish) time out forever — the plugin could never publish. Scope to
+    // the nearest ancestor that actually holds the publish control.
+    if (root.querySelector(PUBLISH_CONTROL_SELECTOR) !== null) {
       return scopedDom(root);
+    }
+    for (let host = root.parentElement; host && host !== document.body; host = host.parentElement) {
+      if (host.querySelector(PUBLISH_CONTROL_SELECTOR) !== null) {
+        return scopedDom(host);
+      }
     }
     const parent = root.parentElement;
     if (parent) {
@@ -1821,7 +1835,11 @@ function captionsContentReadyInRoot(root: Element): boolean {
     root,
     "ytve-lightweight-textarea pre, .segment-text pre",
   )) {
-    if (!isActiveElement(pre)) {
+    // Live 2026-10-21: tp-yt-iron-list virtualization hides offscreen cue
+    // items (visibility/display) while their text is fully loaded — cue TEXT
+    // is the readiness evidence, not viewport placement. Only attribute-hidden
+    // (hidden / aria-hidden) or retained-page nodes are excluded.
+    if (!isLoadedContent(pre)) {
       continue;
     }
     const body = (pre.textContent ?? "").replace(/\s+/g, " ").trim();
