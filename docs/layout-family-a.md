@@ -66,14 +66,26 @@ href 均为**相对路径**；仅一个 `a[aria-current='page']`（当前页）�
 **不存在**经典表格结构：无 `ytcp-video-section-content#video-list`、无 `ytcp-video-row`、
 无 `a#video-title`、无 `.tablecell-*`、无 `ytcp-table-footer`、无排序表头、无分页。
 
-结构：
+结构（2026-10-21 晚修正：shelf header 与 items 是**兄弟节点**）：
 
 ```
 ytcp-animatable.page.selected[name="channel.content"]
 └ ytcp-section-list-renderer[data-target-id="browse-feedFEcontent_hub"]
-  └ horizontal-shelf-view-model × 3            （shelf 头：「视频 查看全部」「短视频 查看全部」「播放列表 查看全部」）
-    └ yt-lockup-view-model.ytLockupViewModelWrapper   （视频卡片）
+  └ horizontal-shelf-view-model.ytwHorizontalShelfViewModelHost × 3
+    ├ div.ytwHorizontalShelfViewModelHeader
+    │  └ yt-section-header-view-model → yt-shelf-header-layout
+    │     └ h2.ytShelfHeaderLayoutTitle = 「视频」/「短视频」/「播放列表」（精确标题）
+    │       （"查看全部" 在 trailing-actions 按钮里，非标题文本）
+    └ div.ytwHorizontalShelfViewModelOuterContainer
+      └ div.ytwHorizontalShelfViewModelHorizontalContainer
+        └ div.ytwHorizontalShelfViewModelItems
+          └ yt-suspense-view-model → yt-lockup-view-model（视频卡片）
 ```
+
+**解析规则要点**：shelf 归属必须以 `horizontal-shelf-view-model`（或 OuterContainer
++ 其父级 header）为范围；只取标题为「视频」的 shelf；`content-id-PL…` 播放列表卡
+排除；短视频 shelf（标题「短视频」）排除。早期实现只在 items 容器内找 header
+（兄弟结构下找不到）→ 所有 shelf 放行，短视频卡片被误收（真机回归发现）。
 
 ### 1.1 视频卡片（lockup）解剖
 

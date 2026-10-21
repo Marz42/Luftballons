@@ -137,26 +137,55 @@ function readCardDate(card: Element): string | null {
 /**
  * Parse family A video cards from the 视频 shelf only (not 短视频 / 播放列表).
  * Playlists (`content-id-PL…`) are excluded by id shape.
+ *
+ * Real anatomy (docs/layout-family-a.md §1.1): each shelf is
+ * `horizontal-shelf-view-model` → sibling `div.ytwHorizontalShelfViewModelHeader`
+ * (h2 title 「视频」/「短视频」/「播放列表」) + `div.ytwHorizontalShelfViewModelOuterContainer`
+ * → … → `div.ytwHorizontalShelfViewModelItems` → cards. The header is therefore
+ * OUTSIDE the items container — look it up in the scope or its parent.
  */
 export function parseFamilyAVideos(root: ParentNode): ParsedContentVideo[] {
   const feed = root.querySelector(HUB_FEED_SELECTOR);
   if (!feed) return [];
 
   const out: ParsedContentVideo[] = [];
-  const shelves = Array.from(feed.querySelectorAll("*")).filter((el) =>
-    el.classList.contains("ytwHorizontalShelfViewModelOuterContainer"),
-  );
+  const scopes: Element[] = [];
+  const seen = new Set<Element>();
+  const processedCards = new Set<Element>();
+  for (const el of Array.from(feed.querySelectorAll("*"))) {
+    const isShelfHost =
+      el.tagName.toLowerCase() === "horizontal-shelf-view-model" ||
+      el.classList.contains("ytwHorizontalShelfViewModelOuterContainer");
+    if (!isShelfHost || seen.has(el)) continue;
+    seen.add(el);
+    scopes.push(el);
+  }
   // If shelf wrappers are absent (fixture), fall back to the feed itself.
-  const scopes: Element[] = shelves.length > 0 ? shelves : [feed];
+  if (scopes.length === 0) scopes.push(feed);
 
   for (const scope of scopes) {
-    const header = textOf(
-      scope.querySelector("yt-section-header-view-model, .ytwHorizontalShelfViewModelHeader"),
-    );
-    // Family A doc: headers 「视频查看全部」「短视频查看全部」「播放列表查看全部」.
-    if (header && !/^视频/.test(header)) continue;
+    const headerEl =
+      scope.querySelector(
+        "h2.ytShelfHeaderLayoutTitle, yt-section-header-view-model, .ytwHorizontalShelfViewModelHeader",
+      ) ??
+      scope.parentElement?.querySelector(
+        "h2.ytShelfHeaderLayoutTitle, yt-section-header-view-model, .ytwHorizontalShelfViewModelHeader",
+      ) ??
+      null;
+    const header = textOf(headerEl);
+    // Family A doc: titles 「视频」「短视频」「播放列表」(header may concatenate
+    // the trailing 「查看全部」 action text). 「短视频」must NOT pass /^视频/.
+    if (header && !/^视频(?!短视频)/.test(header.replace(/\s+/g, ""))) continue;
 
+    const cards: Element[] = [];
     for (const card of Array.from(scope.querySelectorAll("yt-lockup-view-model"))) {
+      if (!processedCards.has(card)) {
+        processedCards.add(card);
+        cards.push(card);
+      }
+    }
+
+    for (const card of cards) {
       if (!isActiveElement(card)) continue;
       const contentId = cardContentId(card);
       if (contentId && /^PL/i.test(contentId)) continue; // playlist card

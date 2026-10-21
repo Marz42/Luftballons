@@ -138,15 +138,41 @@ function mountFamilyAFixture(opts: FamilyAFixtureOptions = {}): void {
   }
 
   const feed = el("ytcp-section-list-renderer", { "data-target-id": "browse-feedFEcontent_hub" }, [
-    el("div", { class: "ytwHorizontalShelfViewModelOuterContainer" }, [
-      el("yt-section-header-view-model", {}, ["视频查看全部"]),
-      ...cardNodes,
+    el("horizontal-shelf-view-model", { class: "ytwHorizontalShelfViewModelHost" }, [
+      el("div", { class: "ytwHorizontalShelfViewModelHeader" }, [
+        el("yt-section-header-view-model", {}, ["视频查看全部"]),
+      ]),
+      el("div", { class: "ytwHorizontalShelfViewModelOuterContainer" }, [
+        el("div", { class: "ytwHorizontalShelfViewModelItems" }, cardNodes),
+      ]),
     ]),
-    el("div", { class: "ytwHorizontalShelfViewModelOuterContainer" }, [
-      el("yt-section-header-view-model", {}, ["短视频查看全部"]),
+    el("horizontal-shelf-view-model", { class: "ytwHorizontalShelfViewModelHost" }, [
+      el("div", { class: "ytwHorizontalShelfViewModelHeader" }, [
+        el("yt-section-header-view-model", {}, ["短视频查看全部"]),
+      ]),
+      el("div", { class: "ytwHorizontalShelfViewModelOuterContainer" }, [
+        el("div", { class: "ytwHorizontalShelfViewModelItems" }, [
+          el("yt-lockup-view-model", {}, [
+            el("div", { class: "ytLockupViewModelHost content-id-ShortS123456" }, [
+              el("h3", {}, [
+                el("a", { class: "ytLockupMetadataViewModelTitle", href: "/video/ShortS123456/edit" }, ["A Short"]),
+              ]),
+              el("div", { class: "ytLockupMetadataViewModelMetadata" }, [
+                el("div", { class: "ytContentMetadataViewModelMetadataRow" }, ["2026年5月1日"]),
+                el("div", { class: "ytContentMetadataViewModelMetadataRow" }, [
+                  el("span", { "aria-label": "7次观看" }),
+                ]),
+              ]),
+            ]),
+          ]),
+        ]),
+      ]),
     ]),
-    el("div", { class: "ytwHorizontalShelfViewModelOuterContainer" }, [
-      el("yt-section-header-view-model", {}, ["播放列表查看全部"]),
+    el("horizontal-shelf-view-model", { class: "ytwHorizontalShelfViewModelHost" }, [
+      el("div", { class: "ytwHorizontalShelfViewModelHeader" }, [
+        el("yt-section-header-view-model", {}, ["播放列表查看全部"]),
+      ]),
+      el("div", { class: "ytwHorizontalShelfViewModelOuterContainer" }, []),
     ]),
   ]);
 
@@ -201,7 +227,9 @@ describe("family A content adapter (docs/layout-family-a.md)", () => {
       title: "Default title",
       views: 0,
     });
+    // Playlist AND shorts cards must not enter the recent-videos dataset.
     expect(videos.some((v) => (v.videoId ?? "").startsWith("PL"))).toBe(false);
+    expect(videos.some((v) => v.videoId === "ShortS123456")).toBe(false);
   });
 });
 
