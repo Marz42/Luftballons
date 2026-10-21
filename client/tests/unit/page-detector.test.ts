@@ -9,6 +9,7 @@ import {
   studioModuleAvailability,
 } from "../../src/sites/youtube-studio/page-detector.js";
 import {
+  channelEntryNavTarget,
   dashboardNavTarget,
   navTargetFor,
   STUDIO_TARGETS,
@@ -395,5 +396,61 @@ describe("page identity via ytcp-animatable.page.selected (family A pack §0.2)"
     app.append(drawer, page);
     document.body.append(app);
     expect(detectPageFromDom(document)).toBe("CONTENT");
+  });
+});
+
+describe("H2 regression: video-context drawer hops through 频道内容", () => {
+  afterEach(() => {
+    document.body.replaceChildren();
+  });
+
+  it("finds the channel entry anchor and reaches DASHBOARD via the hop", async () => {
+    // Video-context drawer (docs/layout-family-a.md §0.3): only「频道内容」
+    // /channel/{id}/videos is channel-scoped; clicking it swaps in the
+    // channel drawer (SPA simulation).
+    const app = document.createElement("ytcp-app");
+    const drawer = document.createElement("ytcp-navigation-drawer");
+    const entry = document.createElement("a");
+    entry.setAttribute("href", "/channel/UC_x/videos");
+    entry.textContent = "频道内容";
+    const videoLink = document.createElement("a");
+    videoLink.setAttribute("href", "/video/abc/analytics/tab-overview/period-default");
+    drawer.append(entry, videoLink);
+    app.append(drawer);
+    document.body.append(app);
+
+    entry.addEventListener("click", () => {
+      // channel context: SPA swaps the drawer and selects the content page
+      drawer.replaceChildren();
+      const dash = document.createElement("a");
+      dash.setAttribute("href", "/channel/UC_x");
+      dash.textContent = "信息中心";
+      drawer.append(dash);
+      const page = document.createElement("ytcp-animatable");
+      page.setAttribute("class", "page selected");
+      page.setAttribute("name", "channel.content");
+      app.append(page);
+    });
+
+    const dom = createDomService();
+    const entryTarget = channelEntryNavTarget();
+    expect(resolveDomTarget(entryTarget, document)).toBe(entry);
+
+    // Channel ANALYTICS anchor must never match the video-scoped analytics link.
+    expect(
+      resolveDomTarget(navTargetFor("ANALYTICS"), document),
+    ).toBeNull();
+
+    const nav = createNavigationService({
+      dom,
+      getHref: () => "https://studio.youtube.com/video/abc/translations",
+      defaultTimeoutMs: 300,
+    });
+    await nav.navigate("DASHBOARD");
+    const dash = resolveDomTarget(
+      navTargetFor("DASHBOARD", { href: "https://studio.youtube.com/channel/UC_x/videos" }),
+      document,
+    );
+    expect(dash?.getAttribute("href")).toBe("/channel/UC_x");
   });
 });

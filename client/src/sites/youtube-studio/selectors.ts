@@ -136,6 +136,20 @@ export function dashboardNavTarget(channelId: string): DomTarget {
 }
 
 /**
+ * Channel-context entry anchor (2026-10-21 live evidence): video-scoped
+ * drawers (docs/layout-family-a.md §0.3) expose only「频道内容」
+ * `/channel/{id}/videos` as the way back to channel context.
+ */
+export function channelEntryNavTarget(): DomTarget {
+  return {
+    id: "nav.channel_entry",
+    selectorFallback: ['ytcp-navigation-drawer a[href^="/channel/"][href$="/videos"]'],
+    matches: isActiveElement,
+    unique: true,
+  };
+}
+
+/**
  * Dashboard nav anchor when the channel id is not derivable from the current
  * href (e.g. /video/{id}/…). Real device (docs/layout-family-a.md §0.3): the
  * drawer has exactly one relative single-segment `/channel/{id}` anchor
@@ -186,17 +200,19 @@ export const STUDIO_TARGETS = {
   "nav.analytics": {
     id: "nav.analytics",
     // calibrated: both variants use …/analytics/tab-overview…
-    // future fallback (no aria-label on real device): ariaLabel: "Analytics"
+    // Channel-scoped prefix required: video-context drawers expose
+    // /video/{id}/analytics/… which is a DIFFERENT (video) analytics surface.
     selectorFallback:
-      'ytcp-navigation-drawer a[href*="/analytics/tab-overview"]',
+      'ytcp-navigation-drawer a[href^="/channel/"][href*="/analytics/tab-overview"]',
   },
   "nav.content": {
     id: "nav.content",
-    // calibrated dual variant: /videos/upload (A) or /content (B)
-    // future fallback (no aria-label on real device): ariaLabel: "Content"
+    // calibrated dual variant: /videos/upload (A) or /content (B);
+    // video-context drawers expose /channel/{id}/videos (「频道内容」).
     selectorFallback: [
-      'ytcp-navigation-drawer a[href*="/videos/upload"]',
-      'ytcp-navigation-drawer a[href*="/content"]',
+      'ytcp-navigation-drawer a[href^="/channel/"][href*="/videos/upload"]',
+      'ytcp-navigation-drawer a[href^="/channel/"][href*="/content"]',
+      'ytcp-navigation-drawer a[href^="/channel/"][href$="/videos"]',
     ],
   },
   "nav.subtitles": {

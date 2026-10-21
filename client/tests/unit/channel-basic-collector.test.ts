@@ -66,7 +66,7 @@ describe("youtube.channel.basic collector (FT-009)", () => {
     const taskId = await runner.start("youtube.channel.basic");
     await vi.waitFor(() => {
       expect(runner.getState(taskId)).toBe("COMPLETED");
-    });
+    }, { timeout: 5000 });
 
     const result = runner.getSnapshot(taskId).result;
     expect(result?.collectionIds).toEqual(["col-p3-complete"]);
@@ -111,7 +111,7 @@ describe("youtube.channel.basic collector (FT-009)", () => {
     const taskId = await runner.start("youtube.channel.basic");
     await vi.waitFor(() => {
       expect(["COMPLETED", "PARTIAL"]).toContain(runner.getState(taskId));
-    });
+    }, { timeout: 5000 });
 
     const stored = await collections.get("col-analytics");
     const data = stored?.data as ChannelBasicData;
@@ -188,7 +188,7 @@ describe("youtube.channel.basic collector (FT-009)", () => {
 
     await vi.waitFor(() => {
       expect(runner.getState(taskId)).toBe("CANCELLED");
-    });
+    }, { timeout: 5000 });
 
     expect(fixture.href.includes("/videos")).toBe(false);
 
@@ -230,7 +230,7 @@ describe("youtube.channel.basic collector (FT-009)", () => {
     const taskId = await runner.start("youtube.channel.basic");
     await vi.waitFor(() => {
       expect(runner.getState(taskId)).toBe("PARTIAL");
-    });
+    }, { timeout: 5000 });
     const stored = await collections.get("col-undef");
     const data = stored?.data as ChannelBasicData;
     expect(data.summary.views).toBeUndefined();

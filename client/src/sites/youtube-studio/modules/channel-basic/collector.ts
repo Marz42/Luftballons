@@ -358,6 +358,40 @@ export async function runChannelBasicCollector(
   let savedId: string | undefined;
   /** Fields the Studio UI itself shows as "no value" (placeholder) — not failures. */
   const absentFields = new Set<string>();
+
+  /**
+   * Bounded read retry (M4): a page-ready anchor can appear before its metric
+   * nodes render (SPA). Retry empty/placeholder reads briefly; never longer
+   * than the content budget (tests keep it small via contentTimeoutMs).
+   */
+  const metricRetryMs = Math.min(2_000, deps.contentTimeoutMs ?? 2_000);
+  const readTextEventually = async (
+    target: Parameters<CancellableDomService["readText"]>[0],
+  ): Promise<string | null> => {
+    const deadline = Date.now() + metricRetryMs;
+    let last: string | null = null;
+    for (;;) {
+      throwIfAborted(ctx.signal);
+      last = await deps.dom.readText(target);
+      if (last !== null && !isDisplayPlaceholder(last)) {
+        return last;
+      }
+      if (Date.now() >= deadline) {
+        return last;
+      }
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(resolve, 120);
+        ctx.signal.addEventListener(
+          "abort",
+          () => {
+            clearTimeout(timer);
+            resolve();
+          },
+          { once: true },
+        );
+      });
+    }
+  };
   const hasPayload = (): boolean =>
     draft.channelName.trim().length > 0 ||
     draft.views !== undefined ||
@@ -452,7 +486,7 @@ export async function runChannelBasicCollector(
     throwIfAborted(ctx.signal);
 
     const metrics: DraftMetrics = {};
-    const periodRaw = await deps.dom.readText(getTarget("dashboard.period"));
+    const periodRaw = await readTextEventually(getTarget("dashboard.period"));
     if (periodRaw) {
       metrics.periodLabel = periodRaw;
       draft.periodLabel = periodRaw;
@@ -461,14 +495,14 @@ export async function runChannelBasicCollector(
     const dashViewsRead = applyMetric(
       metrics,
       "views",
-      await deps.dom.readText(getTarget("dashboard.views")),
+      await readTextEventually(getTarget("dashboard.views")),
       warnings,
       "dashboard",
     );
     const dashDeltaRead = applyMetric(
       metrics,
       "subscriberDelta",
-      await deps.dom.readText(getTarget("dashboard.subscriberDelta")),
+      await readTextEventually(getTarget("dashboard.subscriberDelta")),
       warnings,
       "dashboard",
     );
@@ -500,11 +534,11 @@ export async function runChannelBasicCollector(
       }
       throwIfAborted(ctx.signal);
 
-      const analyticsPeriod = await deps.dom.readText(getTarget("analytics.period"));
-      const dates = periodDates(await deps.dom.readText(getTarget("analytics.dates")));
+      const analyticsPeriod = await readTextEventually(getTarget("analytics.period"));
+      const dates = periodDates(await readTextEventually(getTarget("analytics.dates")));
       const analytics: DraftMetrics = {};
-      const anViewsRead = applyMetric(analytics, "views", await deps.dom.readText(getTarget("analytics.views")), warnings, "analytics");
-      const anDeltaRead = applyMetric(analytics, "subscriberDelta", await deps.dom.readText(getTarget("analytics.subscriberDelta")), warnings, "analytics");
+      const anViewsRead = applyMetric(analytics, "views", await readTextEventually(getTarget("analytics.views")), warnings, "analytics");
+      const anDeltaRead = applyMetric(analytics, "subscriberDelta", await readTextEventually(getTarget("analytics.subscriberDelta")), warnings, "analytics");
       // Never merge a dashboard metric with an unverified Analytics period.
       // If Analytics has values, use that page as the sole summary source.
       if (analytics.views !== undefined || analytics.subscriberDelta !== undefined) {
@@ -575,8 +609,29 @@ export async function runChannelBasicCollector(
     const family = detectContentFamily(deps.document ?? document);
     if (family === "A_HUB") {
       // Family A (Content Hub): shelf lockup cards, no table/pagination.
-      // docs/layout-family-a.md §1.2.
-      const cards = parseFamilyAVideos(deps.document ?? document);
+      // docs/layout-family-a.md §1.2. Cards stream in with their icon metrics —
+      // give unreadable cards a bounded settle window (same H4 policy as rows).
+      const settleDeadline = Date.now() + (deps.contentTimeoutMs ?? 5_000);
+      let cards = parseFamilyAVideos(deps.document ?? document);
+      while (
+        Date.now() < settleDeadline &&
+        cards.some((c) => c.skipReason)
+      ) {
+        throwIfAborted(ctx.signal);
+        await new Promise<void>((resolve) => {
+          const timer = setTimeout(resolve, 120);
+          ctx.signal.addEventListener(
+            "abort",
+            () => {
+              clearTimeout(timer);
+              resolve();
+            },
+            { once: true },
+          );
+        });
+        cards = parseFamilyAVideos(deps.document ?? document);
+      }
+      throwIfAborted(ctx.signal);
       if (cards.length === 0) {
         warn(
           warnings,

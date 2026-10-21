@@ -281,6 +281,41 @@ function abortError(): DOMException {
   return new DOMException("Aborted", "AbortError");
 }
 
+/**
+ * Realistic click: a bare `el.click()` (single untrusted click event) is
+ * swallowed by some SPA routers (2026-10-21 live: Studio view transitions
+ * stick — URL advances, view stays). Dispatch the pointer/mouse sequence a
+ * real user produces, then the click (with default action) once.
+ */
+export function dispatchRealisticClick(el: Element): void {
+  const view = el.ownerDocument.defaultView ?? window;
+  const common = { bubbles: true, cancelable: true, composed: true, view } as const;
+  const fire = (type: string, ctor: typeof MouseEvent): void => {
+    try {
+      const opts =
+        ctor === PointerEvent
+          ? { ...common, pointerId: 1, pointerType: "mouse", isPrimary: true }
+          : common;
+      el.dispatchEvent(new ctor(type, opts));
+    } catch {
+      /* event ctor unavailable */
+    }
+  };
+  fire("pointerover", PointerEvent);
+  fire("pointerenter", PointerEvent);
+  fire("mouseover", MouseEvent);
+  fire("mouseenter", MouseEvent);
+  fire("pointerdown", PointerEvent);
+  fire("mousedown", MouseEvent);
+  fire("pointerup", PointerEvent);
+  fire("mouseup", MouseEvent);
+  if (el instanceof HTMLElement) {
+    el.click();
+  } else {
+    fire("click", MouseEvent);
+  }
+}
+
 export async function waitForDomTarget(
   target: DomTarget,
   options: {
@@ -375,13 +410,7 @@ export function createDomService(
       if (!el) {
         throw new DomNotFoundError(target.id);
       }
-      if (el instanceof HTMLElement) {
-        el.click();
-      } else {
-        el.dispatchEvent(
-          new MouseEvent("click", { bubbles: true, cancelable: true }),
-        );
-      }
+      dispatchRealisticClick(el);
     },
 
     async readText(target) {

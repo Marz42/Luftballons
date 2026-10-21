@@ -11,6 +11,7 @@ import {
   type StudioPage,
 } from "./page-detector.js";
 import {
+  channelEntryNavTarget,
   extractVideoIdFromHref,
   navTargetFor,
   pageReadyTarget,
@@ -210,7 +211,36 @@ export function createNavigationService(
       href,
       ...(videoId ? { videoId } : {}),
     });
-    const el = await options.dom.find(navTarget);
+    let el = await options.dom.find(navTarget);
+    if (!el && (target === "DASHBOARD" || target === "ANALYTICS" || target === "CONTENT")) {
+      // Video-context drawers (family A pack §0.3) carry only the channel
+      // entry「频道内容」/channel/{id}/videos — hop through it once into
+      // channel context, then retry the real target (bounded, fail-closed).
+      let entry = await options.dom.find(channelEntryNavTarget());
+      // Studio's SPA router occasionally swallows the first synthetic click
+      // (URL advances, view stays). Bounded: click → wait → retry once.
+      for (let attempt = 0; entry && attempt < 2 && !el; attempt++) {
+        await options.dom.click(channelEntryNavTarget());
+        try {
+          await waitReady("CONTENT", Math.min(defaultTimeoutMs, 8_000), signal);
+        } catch (error) {
+          throwIfAborted(signal);
+          if (!(error instanceof NavigationError)) throw error;
+        }
+        throwIfAborted(signal);
+        // The drawer swaps to channel context slightly after the page host
+        // switch — give the anchor a bounded window instead of one-shot find.
+        try {
+          el = await options.dom.waitFor(navTarget, 4_000, signal);
+        } catch {
+          throwIfAborted(signal);
+          el = null;
+        }
+        if (!el) {
+          entry = await options.dom.find(channelEntryNavTarget());
+        }
+      }
+    }
     if (!el) {
       throw new NavigationError(
         "NO_ANCHOR",

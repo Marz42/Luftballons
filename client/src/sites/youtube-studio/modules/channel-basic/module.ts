@@ -29,6 +29,8 @@ export interface ChannelBasicModuleOptions {
   collectionId?: string;
   installationId?: string;
   collectorVersion?: number;
+  /** Content readiness / metric-read retry budget (ms). */
+  contentTimeoutMs?: number;
 }
 
 function isAbortError(error: unknown): boolean {
@@ -73,6 +75,9 @@ export function createChannelBasicModule(
             : {}),
           ...(options.collectorVersion !== undefined
             ? { collectorVersion: options.collectorVersion }
+            : {}),
+          ...(options.contentTimeoutMs !== undefined
+            ? { contentTimeoutMs: options.contentTimeoutMs }
             : {}),
         };
         return await runChannelBasicCollector(ctx, deps);

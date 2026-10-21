@@ -38,6 +38,7 @@ export function createFixtureChannelModule(
     navigation,
     getHref: () => fixture.href,
     detectDocument: document,
+    contentTimeoutMs: 500,
     ...overrides,
   });
 }

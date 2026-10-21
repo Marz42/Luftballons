@@ -279,6 +279,7 @@ describe("youtube.channel.basic on family A surfaces", () => {
       navigation,
       getHref: spa.getHref,
       detectDocument: document,
+      contentTimeoutMs: 100,
       collectionId: "col-family-a",
       installationId: "inst-fa",
     });
@@ -301,7 +302,7 @@ describe("youtube.channel.basic on family A surfaces", () => {
     const taskId = await runner.start("youtube.channel.basic");
     await vi.waitFor(() => {
       expect(["COMPLETED", "PARTIAL"]).toContain(runner.getState(taskId));
-    });
+    }, { timeout: 5000 });
     const stored = await collections.get("col-family-a");
     const data = stored?.data as ChannelBasicData;
     expect(data.recentVideos).toHaveLength(2);
@@ -319,7 +320,7 @@ describe("youtube.channel.basic on family A surfaces", () => {
     const taskId = await runner.start("youtube.channel.basic");
     await vi.waitFor(() => {
       expect(["COMPLETED", "PARTIAL"]).toContain(runner.getState(taskId));
-    });
+    }, { timeout: 5000 });
     const stored = await collections.get("col-family-a");
     expect(stored?.warnings?.some((w) => w.code === "METRIC_UNPARSED")).toBe(false);
     // subscriberDelta legitimately absent in the UI → not a core-field failure.
@@ -332,7 +333,7 @@ describe("youtube.channel.basic on family A surfaces", () => {
     const taskId = await runner.start("youtube.channel.basic");
     await vi.waitFor(() => {
       expect(["COMPLETED", "PARTIAL"]).toContain(runner.getState(taskId));
-    });
+    }, { timeout: 5000 });
     const stored = await collections.get("col-family-a");
     expect(Array.isArray(stored?.warnings)).toBe(true);
     expect(stored?.warnings?.length).toBeGreaterThan(0);
@@ -368,6 +369,7 @@ describe("youtube.channel.basic on family A surfaces", () => {
       navigation: broken,
       getHref: spa.getHref,
       detectDocument: document,
+      contentTimeoutMs: 100,
       collectionId: "col-fail-partial",
       installationId: "inst-fa",
     });
@@ -385,7 +387,7 @@ describe("youtube.channel.basic on family A surfaces", () => {
     const taskId = await runner.start("youtube.channel.basic");
     await vi.waitFor(() => {
       expect(runner.getState(taskId)).toBe("PARTIAL");
-    });
+    }, { timeout: 5000 });
     const stored = await collections.get("col-fail-partial");
     expect(stored?.status).toBe("PARTIAL");
     const data = stored?.data as ChannelBasicData;

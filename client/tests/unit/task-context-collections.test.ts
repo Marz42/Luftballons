@@ -55,7 +55,7 @@ describe("TaskContext.collections injection", () => {
     const taskId = await runner.start("youtube.channel.basic");
     await vi.waitFor(() => {
       expect(runner.getState(taskId)).toBe("COMPLETED");
-    });
+    }, { timeout: 5000 });
     expect(seen).toBeInstanceOf(NoopCollectionService);
     expect(runner.getCollections()).toBeInstanceOf(NoopCollectionService);
   });
@@ -83,7 +83,7 @@ describe("TaskContext.collections injection", () => {
     const taskId = await runner.start("youtube.channel.basic");
     await vi.waitFor(() => {
       expect(["COMPLETED", "PARTIAL"]).toContain(runner.getState(taskId));
-    });
+    }, { timeout: 5000 });
 
     const snapshot = runner.getSnapshot(taskId);
     expect(snapshot.result?.collectionIds).toEqual(["from-module"]);
@@ -137,7 +137,7 @@ describe("TaskContext.collections injection", () => {
     const taskId = await runner.start("youtube.channel.basic");
     await vi.waitFor(() => {
       expect(runner.getState(taskId)).toBe("PARTIAL");
-    });
+    }, { timeout: 5000 });
   });
 
   it("UI-absent metrics (「—」) map to COMPLETED, not permanent PARTIAL", async () => {
@@ -175,7 +175,7 @@ describe("TaskContext.collections injection", () => {
     const taskId = await runner.start("youtube.channel.basic");
     await vi.waitFor(() => {
       expect(runner.getState(taskId)).toBe("COMPLETED");
-    });
+    }, { timeout: 5000 });
   });
 
   it("createMockChannelBasicData helper remains available for tests", async () => {
@@ -230,7 +230,7 @@ describe("TaskContext.collections injection", () => {
     const taskId = await runner.start("youtube.channel.basic");
     await vi.waitFor(() => {
       expect(runner.getState(taskId)).toBe("COMPLETED");
-    });
+    }, { timeout: 5000 });
     const stored = await collections.get("mock-col");
     expect((stored?.data as ChannelBasicData).channel.channelName).toBe(
       "Mocked",
