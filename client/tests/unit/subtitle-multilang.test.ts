@@ -963,13 +963,16 @@ describe("youtube.subtitle.multilang (FT-011 / P4-T1…T5)", () => {
       subtitles: {
         existingLanguages: [],
         pickerLanguages: [{ code: "de", label: "Deutsch" }],
-        // Beyond CAPTIONS_READY_TIMEOUT + human ready-confirm recheck window.
+        // Beyond the injected READY budget + human ready-confirm recheck window.
         autoTranslateContentDelayMs: 25_000,
       },
     });
     const runner = makeRunner(
       createFixtureSubtitleModule(fixture, {
         initialLanguages: [{ code: "de", label: "Deutsch" }],
+        // Default budget is now 90s (live translations exceed 12s); this test
+        // verifies the refusal path with a deliberately small budget.
+        captionsReadyTimeoutMs: 3_000,
       }),
       createAutoApproveGate(),
     );

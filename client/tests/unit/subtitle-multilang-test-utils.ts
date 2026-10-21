@@ -17,6 +17,7 @@ export function createFixtureSubtitleModule(
   overrides: {
     initialLanguages?: SubtitleLanguage[];
     onPublishAttempt?: () => void;
+    captionsReadyTimeoutMs?: number;
   } = {},
 ): SubtitleMultilangModule {
   const dom = createDomService();

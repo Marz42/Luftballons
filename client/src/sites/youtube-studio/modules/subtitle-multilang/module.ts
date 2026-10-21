@@ -50,6 +50,10 @@ export interface SubtitleMultilangModuleOptions {
   /** Initial target languages (defaults: de/ja/fr/en/es/ar/ko/zh-Hans). */
   initialLanguages?: SubtitleLanguage[];
   onPublishAttempt?: () => void;
+  /** Progress callback (e.g. TaskContext.setProgress). */
+  onProgress?: (message: string) => void;
+  /** Override the auto-translate READY wait budget (ms). */
+  captionsReadyTimeoutMs?: number;
 }
 
 function isAbortError(error: unknown): boolean {
@@ -156,6 +160,12 @@ export function createSubtitleMultilangModule(
           getTargetLanguages: () => targetLanguages,
           ...(options.onPublishAttempt !== undefined
             ? { onPublishAttempt: options.onPublishAttempt }
+            : {}),
+          onProgress:
+            options.onProgress ??
+            ((message: string) => ctx.setProgress(message, "RUNNING")),
+          ...(options.captionsReadyTimeoutMs !== undefined
+            ? { captionsReadyTimeoutMs: options.captionsReadyTimeoutMs }
             : {}),
         };
         return await runSubtitleMultilangWorkflow(ctx, deps);

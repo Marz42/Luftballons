@@ -46,7 +46,9 @@ import type { HumanGateService } from "../../../../runtime/types.js";
 export { extractVideoIdFromHref };
 
 /** Prefer content ready within this budget; timeout → do not publish. */
-const CAPTIONS_READY_TIMEOUT_MS = 12_000;
+// Live 2026-10-21: auto-translate of a real video can exceed 12s by far;
+// 12s produced WAIT_TIMEOUT on a translation that had actually succeeded.
+const CAPTIONS_READY_TIMEOUT_MS = 90_000;
 /** Post-publish: captions published + list restore. */
 const PUBLISH_VERIFY_TIMEOUT_MS = 8_000;
 /** After publish click: blank error or success in one loop. */
@@ -66,6 +68,10 @@ export interface SubtitleWorkflowDeps {
    * Production leaves undefined.
    */
   onPublishAttempt?: () => void;
+  /** Progress reporting (long auto-translate waits must stay visible). */
+  onProgress?: (message: string) => void;
+  /** Override the READY wait budget (default CAPTIONS_READY_TIMEOUT_MS). */
+  captionsReadyTimeoutMs?: number;
 }
 
 function isAbortError(error: unknown): boolean {
@@ -1751,6 +1757,17 @@ function activeCaptionsEditorRoot(lang: SubtitleLanguage): Element | null {
   if (matches.length === 1) {
     return matches[0]!;
   }
+  // Live 2026-10-21: the real editor surface carries NO language evidence
+  // (no data-language-code; chrome text has no language name) → binding is
+  // "unknown". A SINGLE active editor with no contrary evidence is the
+  // surface the workflow just opened for `lang` — usable for READY evidence.
+  // Mismatch or multiple ambiguous editors stay refused (audit #3/#4).
+  if (
+    scoped.length === 1 &&
+    editorLanguageBinding(scoped[0]!, lang) === "unknown"
+  ) {
+    return scoped[0]!;
+  }
   return null;
 }
 
@@ -1795,6 +1812,22 @@ function actionDomForLanguage(
 function captionsContentReadyInRoot(root: Element): boolean {
   if (root.getAttribute("data-luftballons-captions-ready") === "true") {
     return true;
+  }
+  // Live editor (2026-10-21 real DOM): translated cue body lives in
+  // `ytve-lightweight-textarea > pre` inside
+  // `ytve-captions-editor-caption-segment-line`. Labels/hints (「副标题」
+  // 「按 Enter」) ride along in `.segment-text` — only the pure body counts.
+  for (const pre of querySelectorAllDeep(
+    root,
+    "ytve-lightweight-textarea pre, .segment-text pre",
+  )) {
+    if (!isActiveElement(pre)) {
+      continue;
+    }
+    const body = (pre.textContent ?? "").replace(/\s+/g, " ").trim();
+    if (body.length >= 2) {
+      return true;
+    }
   }
   const markers = querySelectorAllDeep(
     root,
@@ -1939,7 +1972,9 @@ export async function waitUntilCaptionsReady(
   signal: AbortSignal,
   timeoutMs: number = CAPTIONS_READY_TIMEOUT_MS,
   humanGate?: HumanGateService,
+  onProgress?: (message: string) => void,
 ): Promise<void> {
+  const waitStartedAt = Date.now();
   const waitLoop = async (budgetMs: number): Promise<boolean> => {
     const deadline = Date.now() + budgetMs;
     while (Date.now() <= deadline) {
@@ -1957,6 +1992,9 @@ export async function waitUntilCaptionsReady(
           "Studio captions error while waiting for translate ready",
         );
       }
+      onProgress?.(
+        `Waiting for auto-translate (${lang.label})… ${Math.round((Date.now() - waitStartedAt) / 1000)}s`,
+      );
       await abortableDelay(100, signal);
     }
     return false;
@@ -2042,7 +2080,14 @@ async function autoTranslateAndPublish(
     );
   }
 
-  await waitUntilCaptionsReady(dom, lang, signal, CAPTIONS_READY_TIMEOUT_MS, humanGate);
+  await waitUntilCaptionsReady(
+    dom,
+    lang,
+    signal,
+    deps.captionsReadyTimeoutMs ?? CAPTIONS_READY_TIMEOUT_MS,
+    humanGate,
+    deps.onProgress,
+  );
   throwIfAborted(signal);
   assertBinding();
   if (!(await actionDom.exists(publish))) {
@@ -2096,6 +2141,7 @@ async function autoTranslateAndPublish(
       signal,
       TRANSLATE_RETRY_SETTLE_MS,
       humanGate,
+      deps.onProgress,
     );
     throwIfAborted(signal);
     assertBinding();
