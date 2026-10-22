@@ -634,14 +634,25 @@ async function waitForLanguageListSettled(
   signal: AbortSignal,
   /** Maximum wait for rows or explicit empty evidence; elapsed time is not evidence. */
   emptySettleMs = 2_000,
+  /**
+   * Container-mount budget (live 2026-10-22): the translations table mounts
+   * ~2s AFTER the nav click — i.e. after the page-ready evidence that unblocks
+   * the caller. A MISSING container must be waited for within this budget, not
+   * instantly reported as a UI mismatch.
+   */
+  mountSettleMs = 5_000,
 ): Promise<LanguageListParseResult | { kind: "MISSING" }> {
   throwIfAborted(signal);
   const first = await parseLanguageList(dom);
-  if (first.kind !== "EMPTY" || (await hasConfirmedEmptyList(dom))) {
+  if (first.kind !== "EMPTY" && first.kind !== "MISSING") {
+    return first;
+  }
+  if (first.kind === "EMPTY" && (await hasConfirmedEmptyList(dom))) {
     return first;
   }
 
-  const deadline = Date.now() + emptySettleMs;
+  const deadline =
+    Date.now() + (first.kind === "MISSING" ? mountSettleMs : emptySettleMs);
   let last: LanguageListParseResult | { kind: "MISSING" } = first;
   /** Start of the current uninterrupted clean-empty observation, if any. */
   let cleanEmptySince: number | null = null;
@@ -650,15 +661,21 @@ async function waitForLanguageListSettled(
     throwIfAborted(signal);
     await abortableDelay(20, signal);
     last = await parseLanguageList(dom);
-    if (last.kind !== "EMPTY") {
+    if (last.kind !== "EMPTY" && last.kind !== "MISSING") {
       return last;
     }
-    if (await hasConfirmedEmptyList(dom)) {
+    if (last.kind === "EMPTY" && (await hasConfirmedEmptyList(dom))) {
       return last;
     }
     const list = await dom.find(getSubtitleTarget("subtitle.languages.list"));
+    if (last.kind === "MISSING" || !list) {
+      // Container not mounted yet — keep waiting (bounded). Never confirm
+      // empty and never settle for a half-rendered page.
+      cleanEmptySince = null;
+      cleanSamples = 0;
+      continue;
+    }
     const cleanEmpty =
-      !!list &&
       list.getAttribute("aria-busy") !== "true" &&
       !listShowsLoadingChrome(list);
     if (!cleanEmpty) {
@@ -678,6 +695,10 @@ async function waitForLanguageListSettled(
     ) {
       return { kind: "EMPTY", rows: [] };
     }
+  }
+  if (last.kind === "MISSING") {
+    // Container never mounted within the budget — UI mismatch, fail closed.
+    return last;
   }
   // audit #7(c): cannot confirm empty — fail closed, but say exactly why.
   return {

@@ -44,7 +44,8 @@ export class NavigationError extends Error {
     | "WRONG_PAGE"
     | "TIMEOUT"
     | "CANCELLED"
-    | "NO_ANCHOR";
+    | "NO_ANCHOR"
+    | "WINDOW_HIDDEN";
 
   constructor(
     code: NavigationError["code"],
@@ -55,6 +56,15 @@ export class NavigationError extends Error {
     this.code = code;
   }
 }
+
+/**
+ * 2026-10-22 live (document.hidden === true): Studio's SPA view activation is
+ * rAF/timer driven — a hidden/minimized window stalls it ("URL advances, view
+ * stays") and every waitReady burns its budget into a misleading TIMEOUT.
+ * Surface the real cause instead.
+ */
+const WINDOW_HIDDEN_HINT =
+  "Chrome window/tab is in the background — Studio view transitions are throttled while hidden; bring the window to the foreground and retry";
 
 export interface CreateNavigationServiceOptions {
   dom: CancellableDomService;
@@ -160,7 +170,9 @@ export function createNavigationService(
           if (err instanceof DomTimeoutError) {
             throw new NavigationError(
               "TIMEOUT",
-              `waitReady timed out waiting for ${page}`,
+              doc.hidden
+                ? `waitReady timed out waiting for ${page}; ${WINDOW_HIDDEN_HINT}`
+                : `waitReady timed out waiting for ${page}`,
             );
           }
           throw err;
@@ -188,7 +200,9 @@ export function createNavigationService(
 
     throw new NavigationError(
       "TIMEOUT",
-      `waitReady postcondition failed for ${page}`,
+      doc.hidden
+        ? `waitReady postcondition failed for ${page}; ${WINDOW_HIDDEN_HINT}`
+        : `waitReady postcondition failed for ${page}`,
     );
   };
 
@@ -198,6 +212,11 @@ export function createNavigationService(
   ): Promise<void> => {
     throwIfAborted(signal);
     ensureLayout();
+    // Fail fast BEFORE clicking: a click in a hidden window advances the URL
+    // without activating the view and leaves a half-state behind (live 2026-10-22).
+    if (doc.hidden) {
+      throw new NavigationError("WINDOW_HIDDEN", WINDOW_HIDDEN_HINT);
+    }
 
     const from = currentPage();
     if (from !== "UNKNOWN" && from !== target) {

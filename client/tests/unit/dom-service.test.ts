@@ -147,4 +147,53 @@ describe("DomService (FT-008)", () => {
     document.body.append(twin);
     expect(resolveDomTarget(target, document)).toBeNull();
   });
+
+  it("collapses nested title-chain candidates to the innermost node (live 2026-10-22 shape)", () => {
+    // Real 视频字幕 page header: #page-header > .wrapper > .primary > h1 all
+    // share the exact same textContent — one identity, not four candidates.
+    const h1 = document.createElement("h1");
+    h1.className = "page-title";
+    h1.textContent = "视频字幕";
+    const primary = document.createElement("div");
+    primary.className = "primary";
+    primary.append(h1);
+    const wrapper = document.createElement("div");
+    wrapper.className = "wrapper";
+    wrapper.append(primary);
+    const header = document.createElement("ytcp-entity-page-header");
+    header.id = "page-header";
+    header.append(wrapper);
+    document.body.append(header);
+
+    const target: DomTarget = {
+      id: "page.subtitles.title",
+      text: "视频字幕",
+      unique: true,
+    };
+    expect(resolveDomTarget(target, document)).toBe(h1);
+  });
+
+  it("excludes aria-live announcer mirrors from unique identity (live 2026-10-22)", () => {
+    // ytcp-a11y-announcer + div.only-visible-for-accessibility[aria-live] mirror
+    // the page title for screen readers — identity must resolve to the real h1.
+    const announcer = document.createElement("ytcp-a11y-announcer");
+    const mirror = document.createElement("div");
+    mirror.className = "only-visible-for-accessibility";
+    mirror.setAttribute("aria-live", "polite");
+    mirror.textContent = "视频字幕";
+    announcer.append(mirror);
+    document.body.append(announcer);
+
+    const h1 = document.createElement("h1");
+    h1.className = "page-title";
+    h1.textContent = "视频字幕";
+    document.body.append(h1);
+
+    const target: DomTarget = {
+      id: "page.subtitles.title",
+      text: "视频字幕",
+      unique: true,
+    };
+    expect(resolveDomTarget(target, document)).toBe(h1);
+  });
 });

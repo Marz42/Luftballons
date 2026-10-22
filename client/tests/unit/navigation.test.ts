@@ -148,4 +148,41 @@ describe("NavigationService (FT-008)", () => {
     });
     pushSpy.mockRestore();
   });
+
+  function withHiddenDocument<T>(fn: () => Promise<T>): Promise<T> {
+    const original = Object.getOwnPropertyDescriptor(document, "hidden");
+    Object.defineProperty(document, "hidden", {
+      value: true,
+      configurable: true,
+    });
+    return fn().finally(() => {
+      if (original) {
+        Object.defineProperty(document, "hidden", original);
+      } else {
+        delete (document as { hidden?: boolean }).hidden;
+      }
+    });
+  }
+
+  it("refuses to navigate while the tab is hidden (live 2026-10-22: throttled SPA activation)", async () => {
+    fixture = mountStudioFixture({ page: "VIDEO_DETAILS", layout: "2026_V1" });
+    const nav = makeNav();
+    await withHiddenDocument(async () => {
+      await expect(nav.navigate("SUBTITLES")).rejects.toMatchObject({
+        code: "WINDOW_HIDDEN",
+      });
+    });
+    // Fail fast BEFORE clicking: no half-navigated URL left behind.
+    expect(nav.currentPage()).toBe("VIDEO_DETAILS");
+  });
+
+  it("waitReady timeout names the hidden window as the cause (live 2026-10-22)", async () => {
+    fixture = mountStudioFixture({ page: "DASHBOARD", layout: "2026_V1" });
+    const nav = makeNav();
+    await withHiddenDocument(async () => {
+      await expect(nav.waitReady("SUBTITLES", 80)).rejects.toThrow(
+        /foreground/,
+      );
+    });
+  });
 });

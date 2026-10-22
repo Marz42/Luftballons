@@ -12,8 +12,10 @@ export interface DomTarget {
   matches?: (element: Element) => boolean;
   /**
    * Reject ambiguous calibrated targets instead of choosing the first.
-   * Ambiguity (≥2 valid candidates in one branch) stops resolution entirely —
-   * lower-priority fallbacks are never consulted to "pick one" (review R3).
+   * Ambiguity (≥2 DISTINCT valid candidates in one branch — nested wrapper
+   * chains collapse to their innermost node first) stops resolution entirely;
+   * lower-priority fallbacks are never consulted to "pick one" (review R3,
+   * refined against live 2026-10-22 DOM where a page title matches 6 nodes).
    */
   unique?: boolean;
 
@@ -141,6 +143,32 @@ function cssEscape(value: string): string {
 }
 
 /**
+ * Accessibility live regions (aria-live announcers, role=status/log/alert)
+ * mirror page titles and messages for screen readers. They duplicate
+ * label/text evidence and must never IDENTIFY a control or page.
+ *
+ * 2026-10-22 live evidence: the 视频字幕 page title text matched 6 elements —
+ * `ytcp-a11y-announcer` (host) + `div.only-visible-for-accessibility[aria-live]`
+ * (mirror) plus the 4-node header chain
+ * (#page-header > .wrapper > .primary > h1.page-title).
+ *
+ * A node is announcement chrome when it sits inside a live region, or when its
+ * ENTIRE text content is a live mirror it hosts (the announcer wrapper).
+ */
+function isLiveRegionMirror(el: Element): boolean {
+  const regionSel = '[aria-live], [role="status"], [role="log"], [role="alert"]';
+  if (el.closest(regionSel)) {
+    return true;
+  }
+  const mirror = el.querySelector(regionSel);
+  if (!mirror) {
+    return false;
+  }
+  const norm = (s: string | null): string => (s ?? "").replace(/\s+/g, " ").trim();
+  return norm(el.textContent) === norm(mirror.textContent);
+}
+
+/**
  * Generic visibility (no site-specific selectors).
  * Mirrors isActiveElement's hidden / display / visibility checks.
  */
@@ -188,10 +216,28 @@ function constrainCandidates(
   if (filtered.length === 0) {
     return { kind: "missing" };
   }
-  if (target.unique && filtered.length > 1) {
-    return { kind: "ambiguous", count: filtered.length };
+  if (!target.unique) {
+    return { kind: "found", el: filtered[0]! };
   }
-  return { kind: "found", el: filtered[0]! };
+  // review R3 refinement (2026-10-22 live): nested candidates (wrapper →
+  // .primary → h1 sharing the same textContent; a11y-announcer hosting its
+  // aria-live mirror) are ONE hit — keep only the innermost node of each
+  // chain BEFORE judging ambiguity or mirrors. Distinct sibling controls
+  // remain ambiguous and still terminate the resolution.
+  const collapsed = filtered.filter(
+    (el) => !filtered.some((other) => other !== el && el.contains(other)),
+  );
+  const pool = collapsed.length > 0 ? collapsed : filtered;
+  // Unique identity must not resolve to a11y announcement mirrors (the
+  // surviving innermost node of an announcer chain IS the mirror itself).
+  const identity = pool.filter((el) => !isLiveRegionMirror(el));
+  if (identity.length === 0) {
+    return { kind: "missing" };
+  }
+  if (identity.length > 1) {
+    return { kind: "ambiguous", count: identity.length };
+  }
+  return { kind: "found", el: identity[0]! };
 }
 
 /**

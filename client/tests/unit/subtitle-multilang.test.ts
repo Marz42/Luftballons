@@ -188,14 +188,17 @@ describe("youtube.subtitle.multilang (FT-011 / P4-T1…T5)", () => {
 
     const taskId = await runner.start("youtube.subtitle.multilang");
     await vi.waitFor(() => {
+      // Live 2026-10-22: a MISSING container is now waited out (bounded mount
+      // budget) before the fail-closed UI mismatch — the outcome is unchanged
+      // (FAILED, no clicks), it just takes the calibrated wait to get there.
       expect(runner.getState(taskId)).toBe("FAILED");
-    });
+    }, { timeout: 8_000 });
 
     expect(fixture.clickCounts.addLanguage).toBe(0);
     expect(fixture.clickCounts.publish).toBe(0);
     expect(fixture.clickCounts.option).toBe(0);
     expect(runner.getSnapshot(taskId).result?.summary).toMatch(/UI mismatch/i);
-  });
+  }, 15_000);
 
   it("P4-T5 Re-run: second run mostly EXISTS/SKIPPED, no duplicate state", async () => {
     fixture = mountStudioFixture({
@@ -895,6 +898,33 @@ describe("youtube.subtitle.multilang (FT-011 / P4-T1…T5)", () => {
     await vi.waitFor(() => expect(runner.getState(id)).toBe("FAILED"), { timeout: 10_000 });
     expect(fixture.clickCounts.publish).toBe(0);
   }, 12_000);
+
+  it("P1-live: languages container mounting late is waited for, not a UI mismatch (2026-10-22)", async () => {
+    // Live: the translations table mounts ~2s AFTER the nav click — later than
+    // the page-ready evidence that unblocks the list read. The container's
+    // absence must be waited out (bounded), never instantly called UI mismatch.
+    fixture = mountStudioFixture({
+      page: "VIDEO_DETAILS",
+      subtitles: {
+        existingLanguages: [{ code: "en", label: "English" }],
+        pickerLanguages: [{ code: "ja", label: "日本語" }],
+        languagesListMountDelayMs: 600,
+      },
+    });
+    const runner = makeRunner(
+      createFixtureSubtitleModule(fixture, {
+        initialLanguages: [{ code: "en", label: "English" }],
+      }),
+      createAutoApproveGate(),
+    );
+    const id = await runner.start("youtube.subtitle.multilang");
+    await vi.waitFor(() =>
+      expect(["COMPLETED", "PARTIAL", "FAILED"]).toContain(runner.getState(id)),
+    { timeout: 12_000 });
+    const summary = runner.getSnapshot(id).result?.summary ?? "";
+    expect(summary).not.toContain("Subtitle languages list not found");
+    expect(runner.getState(id), summary).toBe("COMPLETED");
+  }, 15_000);
 
   it("P1-live: disabled (grey) auto-translate is skipped → publish still succeeds", async () => {
     fixture = mountStudioFixture({

@@ -247,3 +247,28 @@ B opens `ytgn-language-dialog-row` / 手动字幕 card per selection.
 ### Layout C
 
 待 operator 证据包。
+
+## 2026-10-22 真机复测（SUBTITLES 导航失败定性 + 修正）
+
+调试 Chrome（CDP 9222）实测频道 `UC7Vbu_0GiC7r9Ubek7Ke3fA`、视频
+`VXqaJePprRg`，界面 zh-Hans。本轮用户报错
+`Failed to open subtitles page: TIMEOUT: waitReady timed out waiting for SUBTITLES`
+定性为**三个叠加因素**（均已修复/记录）：
+
+1. **R3 细化（回归，确定性）**：`resolveDomTarget` 的"歧义即终止"误杀 `unique`
+   文本目标——「视频字幕」整文本真机命中 6 个元素（a11y 镜像 + 标题 4 层嵌套链），
+   壳锚点 fallback 永远轮不到 → waitReady 必然超时。修复：嵌套链折叠取最内层 +
+   live-region 镜像排除（`dom-service`，回归测试2条）。同页复刻解析验证：
+   `subtitle.languages.list` → `table#ytgn-video-translations-list-table` 唯一命中。
+2. **后台窗口限流（环境）**：`document.hidden` 时视图激活停滞（URL 前进壳不翻转、
+   定时器限流）；`Page.bringToFront` 后滞留激活瞬间完成。修复：`navigate()`
+   在 hidden 时点击前快速失败（`WINDOW_HIDDEN`），`waitReady` 超时带前台提示。
+3. **列表容器挂载晚于就绪证据（时序）**：表格+行在导航点击后 **~2.1s** 一并挂载
+   （152ms 采样点还没有），而 page-ready 证据先到——旧 `waitForLanguageListSettled`
+   对 MISSING 容器**立即**报 UI mismatch。修复：MISSING 纳入有界等待（5s 预算），
+   仍缺失才 fail-closed。
+
+**验证状态**：修复构建注入真机（GM 垫片）实测 SUBTITLES 导航**通过**（1s 内
+URL+壳激活）；任务推进到列表读取后按旧代码报 UI mismatch（即因素 3），修复后
+待最终整链路复跑（需窗口前台）。真机页面结构修正已同步至
+`docs/layout-family-a.md` §0.1/§0.2/§0.3/§3。

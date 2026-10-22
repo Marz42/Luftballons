@@ -11,14 +11,36 @@
 ### 0.1 保留页机制（影响一切选择器的唯一性/可见性判定）
 
 - `ytcp-app` + `ytcp-navigation-drawer`（`tp-yt-app-drawer` 不存在）。
-- Studio 预创建 **110+ 个 `ytcp-animatable.page`** 壳（全部产品面），任意时刻**仅一个**
-  带 `.selected`。实测名称集合（节选）：
-  `channel`、`channel.content`、`channel.analytics`(+hub_*)、`channel.translations`、
-  `video.edit`、`video.translations`、`video.analytics`(+hub_*)、`video.editor`、
+- Studio 预创建 **107–108 个 `ytcp-animatable.page`** 壳（2026-10-22 实测计数：
+  频道分析页 108、视频编辑页 107），任意时刻**仅一个**带 `.selected`。实测名称
+  集合（节选）：
+  `channel`、`channel.ask_studio`、`channel.content`、`channel.activity`、
+  `channel.editing`、`channel.analytics`(+hub_*)、`channel.translations`、
+  `video.comments`、`video.edit`、`video.live_settings`、`video.editor`、
+  `video.translations`、`video.analytics`(+hub_*)、`video.claims`、`video.clips`、
   `playlist.*`、`owner.*`、`artist.*`、`song.*`…
+- **未激活壳的隐藏形态（2026-10-22 实测）**：`class="page "`（无 `.selected`）+
+  **行内 `style="display:none;"`**，`hidden` / `aria-hidden` 属性**不存在**；且
+  壳内内容可以**已完全加载**（实测 translations 壳在 display:none 状态下已含
+  列表表格与全部行）。判别只能靠 `ytcp-animatable.page:not(.selected)` 祖先规则
+  （`isActiveElement` / `isLoadedContent` / `isInRetainedPage` 已做），不能依赖
+  hidden 属性，也不能用"内容存在"推断页面已激活。
 - **推论**：所有候选元素必须过滤 `ytcp-animatable.page:not(.selected)` 祖先
   （`isActiveElement` 已做）；`unique: true` 目标在保留页含同名节点时会歧义，
   过滤是前提。
+- **文本/aria-label 唯一性不可假设（2026-10-22 实测）**：页面标题「视频字幕」的
+  整文本匹配命中 **6 个元素** —— `ytcp-a11y-announcer` 宿主 +
+  `div.only-visible-for-accessibility[aria-live=polite]` 镜像 + 标题链 4 层嵌套
+  （`#page-header > div.wrapper > div.primary > h1.page-title`）。`unique` 身份
+  解析必须 (a) 折叠嵌套候选链（取最内层）、(b) 排除 live-region 镜像
+  （`[aria-live]` / `role=status|log|alert` 内部，或整内容即镜像的宿主）——
+  `dom-service` 已实现（review R3 细化，回归测试覆盖）。
+- **后台窗口陷阱（2026-10-22 实测）**：`document.hidden === true`（窗口最小化/
+  被完全遮挡）时 Studio 的视图激活（rAF 驱动）**完全停滞**：URL 前进、壳保持
+  `display:none` 不翻转（"URL advances, view stays"），定时器同步被限流
+  （1s sleep 实测变 2s+）。`Page.bringToFront` 后滞留的激活**瞬间完成**。现行
+  代码：`navigate()` 在 hidden 时**点击前**快速失败（`WINDOW_HIDDEN` + 前台提示），
+  `waitReady` 超时信息同样带该提示。
 
 ### 0.2 页面身份：`ytcp-animatable.page.selected` 的 `name` 属性（确定性信号）
 
@@ -33,7 +55,9 @@
 
 h1 文本佐证：「频道信息中心」（`h1.page-title[theme="DASHBOARD"]`）、「内容」、
 「频道分析」、「频道字幕」、「视频详细信息」（`h1.page-title` theme=DEFAULT）、
-「视频字幕」。
+「视频字幕」。**注意（2026-10-22）**：「视频字幕」的整文本匹配不唯一（6 命中，
+见 §0.1），h1 只能作为嵌套链最内层的折叠结果参与 `unique` 判定；壳
+`name` 属性才是确定性身份。
 
 **修复指引**：`pageReadyTarget` / `detectPageFromDom` 优先用
 `ytcp-animatable.page.selected[name="…"]`，比 aria-current / 文本更稳；
@@ -60,6 +84,14 @@ href 均为**相对路径**；仅一个 `a[aria-current='page']`（当前页）�
 注意：`nav.dashboard` 的精确匹配 `a[href="/channel/{cid}"]` 能命中「信息中心」，
 但**从视频页无 channelId 时必须从本表锚点推导**
 （`ytcp-navigation-drawer a[href^="/channel/"]` 取 pathname 首段），不能用占位符。
+
+**视频上下文抽屉（2026-10-22 实测，`/video/{vid}/edit` 页）**：href 前缀全部为
+`/video/{vid}/`，含「字幕」→ **`a[href="/video/{vid}/translations"]`**（与
+`subtitlesNavTarget` 精确锚点一致，唯一）。同组还有
+`/video/{vid}/edit`、`/video/{vid}/analytics/tab-overview/period-default`、
+`/video/{vid}/editor`、`/video/{vid}/comments/inbox`、`/video/{vid}/claims`、
+`/video/{vid}/clips`。频道分析页（视频上下文）的抽屉只暴露**频道级**
+`/channel/{cid}/translations`；视频页才暴露视频级翻译锚点。
 
 ## 1. 内容 Hub（`/channel/{cid}/content`，家族 A 的“视频列表”）
 
@@ -145,14 +177,34 @@ tbody tr
 
 ## 3. 视频字幕页（`/video/<vid>/translations`，语言表）—— 与既有证据包吻合
 
+**完整容器链（2026-10-22 实测）**：
+`ytcp-animatable.page.selected[name="video.translations"]` →
+`ytgn-video-translations-section` → `div.translations-list` →
+`ytgn-video-translations-list[show-header]` →
+`table#ytgn-video-translations-list-table[aria-label="翻译"]` →
+`tbody` → `ytgn-video-translation-row[unified]`。
+
+- 页头链（勿作 unique 直取）：`ytcp-entity-page-header#page-header` >
+  `div.wrapper` > `div.primary` > `h1.page-title`「视频字幕」——4 层嵌套共享同一
+  整文本；另有 `ytcp-a11y-announcer` 镜像（见 §0.1），整文本匹配共 6 命中。
 - 列表：`ytgn-video-translations-list`（本家族 `ui-mode` 为空）→
-  `table#ytgn-video-translations-list-table`。
+  `table#ytgn-video-translations-list-table`（`aria-label="翻译"`，全页唯一）。
+- **挂载时序（2026-10-22 实测）**：导航点击后 **~2.1s** 表格与行才一并挂载
+  （152ms 采样点尚未出现）——**晚于 page-ready 证据**。任何列表读取必须容忍
+  激活后容器迟到（`waitForLanguageListSettled` 已有界等待 MISSING 容器，
+  预算 5s；此前立即判 UI mismatch 是真机失败根因之一）。
 - 行：`ytgn-video-translation-row` → 内部 `tr#row-container`（5 行样本）。
-  **thead 无表头行**（表头「标题和说明」等在表体外的独立 header 区）；
+  **thead 无表头行**（表头「标题和说明」等在表体外的独立 header 区，
+  2026-10-22 复测表头区文本为「语言 字幕 标题和说明」）；
   行收集只走 `ytgn-video-translation-row`，不受表头影响。
+  行文本实测样本：`中文（简体） 已发布2026年10月21日 –`、
+  `日语 – 已发布2026年9月8日`、`英语 （视频语言） 已发布2026年9月8日 已发布`。
 - 语言单元：`.language-text` / `.tablecell-language`（同文本）；无
   `button.language-display-name`（那是家族 B）。真实文本含括注：
-  **`英语 （视频语言）`**（空格 + 全角括号）→ 标签归一化需剥尾部括注。
+  **`英语 （视频语言）`**（空格 + 全角括号）→ 状态括注可剥；
+  **简体/繁体/地区括注是语言身份**（`中文（简体）`→zh-Hans、
+  `葡萄牙语（巴西）`→pt-BR、`英语（美国）`→en-US），**不可剥**（review R2，
+  见 `schema.ts` 的 `resolveLanguageCodeFromLabel` / `languageCodeMatches`）。
 - captions 单元：`ytgn-video-translation-cell-captions`（**在 tr 内**）→
   内部 `ytgn-video-translation-hover-cell` × 2、`#status-info`（captions 状态）。
 - metadata 单元：`ytgn-video-translation-cell-metadata` → 自己的 `#status-info`

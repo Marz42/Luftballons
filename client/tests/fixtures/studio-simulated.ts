@@ -177,6 +177,12 @@ export interface SubtitleFixtureData {
    */
   languagesListRowsDelayMs?: number;
   /**
+   * Live 2026-10-22: the languages container itself mounts AFTER the
+   * page-ready evidence (translations table appears ~2s after the nav click).
+   * Delay the container mount to cover the post-activation render window.
+   */
+  languagesListMountDelayMs?: number;
+  /**
    * After 自动翻译: delay before captions body is marked ready.
    * Publish may enable immediately (Studio race → 无法发布空白字幕).
    */
@@ -701,7 +707,14 @@ function appendSubtitlesBody(
   } else {
     renderItems();
   }
-  editor.append(list);
+  if ((data.languagesListMountDelayMs ?? 0) > 0) {
+    // Container mounts after the page-ready evidence (live 2026-10-22).
+    window.setTimeout(() => {
+      editor.append(list);
+    }, data.languagesListMountDelayMs);
+  } else {
+    editor.append(list);
+  }
 
   if (data.omitControls) {
     main.append(editor);
