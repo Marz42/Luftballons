@@ -2075,17 +2075,29 @@ async function autoTranslateAndPublish(
 
   if (!opts?.skipAutoTranslateClick) {
     const auto = getSubtitleTarget("subtitle.auto_translate");
+    // 2026-10-22 live (P1): Studio greys 自动翻译 out when captions already
+    // exist / translation is not needed. Present-but-GREYED skips the click and
+    // proceeds to the READY/publish phase — never fail the task on it.
+    // MISSING is different: that error is the "control missing" signal which
+    // drives fallbackToManualCaptionsAdd (audit #2) — keep it fail-closed.
+    let autoEl: Element | null = null;
     try {
-      await actionDom.waitFor(auto, 5_000, signal);
+      autoEl = await actionDom.waitFor(auto, 5_000, signal);
     } catch (error) {
       if (isAbortError(error) || signal.aborted) {
         throw error;
       }
+    }
+    if (!autoEl) {
       throw new WaitTimeoutError("自动翻译 control did not appear");
     }
-    await actionDom.click(auto);
-    throwIfAborted(signal);
-    assertBinding();
+    if (!isDisabledControl(autoEl)) {
+      await actionDom.click(auto);
+      throwIfAborted(signal);
+      assertBinding();
+    }
+    // Greyed: nothing to translate — the unified READY budget below stays the
+    // fail-closed gate before publish.
   }
 
   const publish = getSubtitleTarget("subtitle.publish");

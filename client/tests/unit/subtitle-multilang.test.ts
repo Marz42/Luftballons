@@ -896,6 +896,29 @@ describe("youtube.subtitle.multilang (FT-011 / P4-T1…T5)", () => {
     expect(fixture.clickCounts.publish).toBe(0);
   }, 12_000);
 
+  it("P1-live: disabled (grey) auto-translate is skipped → publish still succeeds", async () => {
+    fixture = mountStudioFixture({
+      page: "VIDEO_DETAILS",
+      subtitles: {
+        existingLanguages: [],
+        pickerLanguages: [{ code: "de", label: "Deutsch" }],
+        autoTranslateDisabled: true,
+      },
+    });
+    const runner = makeRunner(
+      createFixtureSubtitleModule(fixture, {
+        initialLanguages: [{ code: "de", label: "Deutsch" }],
+      }),
+      createAutoApproveGate(),
+    );
+    const id = await runner.start("youtube.subtitle.multilang");
+    await vi.waitFor(() => expect(runner.getState(id)).toBe("COMPLETED"), {
+      timeout: 12_000,
+    });
+    expect(fixture.clickCounts.publish).toBe(1);
+    expect(runner.getSnapshot(id).result?.summary).toMatch(/Deutsch\(de\) SUCCESS/);
+  }, 15_000);
+
   it("P1-live: captions cell 已发布 without data attrs → SKIPPED/EXISTS", async () => {
     fixture = mountStudioFixture({
       page: "VIDEO_DETAILS",

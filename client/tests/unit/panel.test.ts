@@ -75,7 +75,10 @@ describe("Luftballons panel UI", () => {
       .map((el) => el.value)
       .sort();
     expect(checked).toEqual(
-      ["ar", "de", "en", "es", "fr", "ja", "ko", "zh-Hans"].sort(),
+      ["ar", "de", "en", "es", "fr", "ja", "ko"].sort(),
+    );
+    expect(langBoxes.some((el) => el.value === "zh-Hans" && !el.checked)).toBe(
+      true,
     );
     expect(langBoxes.some((el) => el.value === "pt" && !el.checked)).toBe(
       true,

@@ -25,7 +25,9 @@ export const PRESET_SUBTITLE_LANGUAGES: readonly SubtitleLanguage[] = [
 
 /**
  * Default panel checkboxes / module targets:
- * 德、日、法、英、西、阿拉伯、韩、中 (pt remains optional, unchecked).
+ * 德、日、法、英、西、阿拉伯、韩 (pt / zh-Hans remain optional, unchecked).
+ * 2026-10-22 product decision: a Chinese channel does not need zh-Hans as a
+ * DEFAULT translate target — it stays available as an opt-in checkbox.
  */
 export const DEFAULT_TARGET_LANGUAGE_CODES: readonly string[] = [
   "de",
@@ -35,7 +37,6 @@ export const DEFAULT_TARGET_LANGUAGE_CODES: readonly string[] = [
   "es",
   "ar",
   "ko",
-  "zh-Hans",
 ] as const;
 
 export function defaultTargetLanguages(): SubtitleLanguage[] {

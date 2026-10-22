@@ -47,7 +47,7 @@ export interface SubtitleMultilangModuleOptions {
   getHref?: () => string;
   /** Override document for layout / page detect (tests). */
   detectDocument?: Document;
-  /** Initial target languages (defaults: de/ja/fr/en/es/ar/ko/zh-Hans). */
+  /** Initial target languages (defaults: de/ja/fr/en/es/ar/ko). */
   initialLanguages?: SubtitleLanguage[];
   onPublishAttempt?: () => void;
   /** Progress callback (e.g. TaskContext.setProgress). */

@@ -182,6 +182,11 @@ export interface SubtitleFixtureData {
    */
   autoTranslateContentDelayMs?: number;
   /**
+   * Auto-translate control visible but disabled (grey) — workflow must skip click.
+   * Captions are already ready / publishable without translating.
+   */
+  autoTranslateDisabled?: boolean;
+  /**
    * Inject a hidden leftover ready marker for another language (must not
    * make the active language READY).
    */
@@ -513,6 +518,20 @@ function appendSubtitlesBody(
     editor.append(leftover);
   }
 
+  const openCaptionsEntry = (langCode: string): void => {
+    activeCaptionsLang = langCode;
+    autoTranslateBtn.hidden = false;
+    if (data.autoTranslateDisabled) {
+      autoTranslateBtn.disabled = true;
+      autoTranslateBtn.setAttribute("aria-disabled", "true");
+      setPublishEnabled(true);
+      markCaptionsReady(true, langCode);
+    } else {
+      autoTranslateBtn.disabled = false;
+      autoTranslateBtn.setAttribute("aria-disabled", "false");
+    }
+  };
+
   const appendCaptionsCell = (
     item: HTMLElement,
     langCode: string,
@@ -546,8 +565,7 @@ function appendSubtitlesBody(
       editBtn.setAttribute("role", "button");
       editBtn.textContent = "编辑";
       editBtn.addEventListener("click", () => {
-        activeCaptionsLang = langCode;
-        autoTranslateBtn.hidden = false;
+        openCaptionsEntry(langCode);
       });
       cellContainer.append(editBtn);
     }
@@ -570,8 +588,7 @@ function appendSubtitlesBody(
         captionsAdd.textContent = "添加";
         captionsAdd.style.visibility = "hidden";
         captionsAdd.addEventListener("click", () => {
-          activeCaptionsLang = langCode;
-          autoTranslateBtn.hidden = false;
+          openCaptionsEntry(langCode);
         });
         cellContainer.append(captionsAdd);
       };
