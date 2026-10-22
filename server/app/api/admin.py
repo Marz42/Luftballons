@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -152,6 +153,24 @@ def admin_toggle_installation(
     return RedirectResponse(url="/admin/installations", status_code=303)
 
 
+def _warning_codes(payload_json: str) -> str:
+    """Comma-joined warning codes for the collections table (review R8)."""
+    try:
+        payload = json.loads(payload_json)
+    except (TypeError, ValueError):
+        return ""
+    warnings = payload.get("warnings") if isinstance(payload, dict) else None
+    if not isinstance(warnings, list):
+        return ""
+    codes: list[str] = []
+    for item in warnings:
+        if isinstance(item, dict):
+            code = item.get("code")
+            if isinstance(code, str) and code:
+                codes.append(code)
+    return ", ".join(codes)
+
+
 @router.get("/collections", response_class=HTMLResponse)
 def admin_collections(
     request: Request,
@@ -170,6 +189,7 @@ def admin_collections(
             "status": r.status,
             "received_at": r.received_at,
             "schema_version": r.schema_version,
+            "warning_codes": _warning_codes(r.payload_json),
         }
         for r in rows
     ]

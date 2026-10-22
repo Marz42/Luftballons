@@ -8,6 +8,13 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field, field_validator
 
 
+class CollectionWarning(BaseModel):
+    """One client-side warning reason (review R8: warnings must survive sync)."""
+
+    code: str = Field(min_length=1, max_length=128)
+    message: str = Field(min_length=1, max_length=2000)
+
+
 class CollectionIngestRequest(BaseModel):
     collection_id: str = Field(min_length=1, max_length=64)
     installation_id: str = Field(min_length=1, max_length=64)
@@ -17,6 +24,7 @@ class CollectionIngestRequest(BaseModel):
     captured_at: str
     status: Literal["COMPLETE", "PARTIAL"]
     data: Any = None
+    warnings: list[CollectionWarning] | None = Field(default=None, max_length=64)
 
     @field_validator("captured_at")
     @classmethod

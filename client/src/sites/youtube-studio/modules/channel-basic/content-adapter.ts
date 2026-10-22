@@ -9,6 +9,7 @@
  */
 
 import { isActiveElement } from "../../selectors.js";
+import { parseDisplayMetric } from "./metrics.js";
 
 export type ContentFamily = "A_HUB" | "B_TABLE" | "UNKNOWN";
 
@@ -17,6 +18,26 @@ export const HUB_FEED_SELECTOR =
 export const CLASSIC_LIST_SELECTOR = "ytcp-video-section-content#video-list";
 const CONTENT_ROW_SELECTOR =
   '[data-luftballons-video-row], ytcp-video-row, tr[data-video-id]';
+
+/**
+ * Studio keeps 100+ retained `ytcp-animatable.page` shells in the DOM
+ * (docs/layout-family-a.md §0) — a stale Hub inside a NON-selected shell must
+ * never decide the family of the page the user is actually looking at
+ * (review R6). Same exclusion rule as isActiveElement / isLoadedContent;
+ * content outside any page shell (fixture shapes) stays visible.
+ */
+function isInRetainedPage(el: Element): boolean {
+  return el.closest("ytcp-animatable.page:not(.selected)") !== null;
+}
+
+function activeContentMatches(
+  root: ParentNode,
+  selector: string,
+): Element[] {
+  return Array.from(root.querySelectorAll(selector)).filter(
+    (el) => !isInRetainedPage(el),
+  );
+}
 
 /** One rendered video card / table row reduced to the dataset fields. */
 export interface ParsedContentVideo {
@@ -32,8 +53,10 @@ export interface ParsedContentVideo {
 }
 
 export function detectContentFamily(root: ParentNode = document): ContentFamily {
-  if (root.querySelector(HUB_FEED_SELECTOR)) return "A_HUB";
-  if (root.querySelector(CLASSIC_LIST_SELECTOR)) return "B_TABLE";
+  if (activeContentMatches(root, HUB_FEED_SELECTOR).length > 0) return "A_HUB";
+  if (activeContentMatches(root, CLASSIC_LIST_SELECTOR).length > 0) {
+    return "B_TABLE";
+  }
   return "UNKNOWN";
 }
 
@@ -75,6 +98,10 @@ const ZH_DATE = /(\d{4})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日/;
  * Views from icon aria-label (calibrated family A: `16次观看` / `无人观看`;
  * en: `16 views` / `No views`). Falls back to the first numeric span of the
  * metrics row. Returns undefined when nothing trustworthy is readable.
+ *
+ * review R4 (2026-10-22): every number goes through the unified
+ * `parseDisplayMetric` — abbreviated displays (1.2K / 1.2万) keep their
+ * multiplier instead of collapsing to the bare mantissa (1.2).
  */
 function readCardViews(card: Element): { value?: number; rounded: boolean } {
   for (const el of Array.from(card.querySelectorAll("[aria-label]"))) {
@@ -83,11 +110,15 @@ function readCardViews(card: Element): { value?: number; rounded: boolean } {
       return { value: 0, rounded: false };
     }
     const m =
-      label.match(/^([\d,]+(?:\.\d+)?)\s*次观看$/) ??
-      label.match(/^([\d,]+(?:\.\d+)?)\s*views?$/i);
+      label.match(/^(.+?)\s*次观看$/) ?? label.match(/^(.+?)\s*views?$/i);
     if (m) {
-      const n = Number(m[1]!.replace(/,/g, ""));
-      if (Number.isFinite(n)) return { value: n, rounded: false };
+      const parsed = parseDisplayMetric(m[1]);
+      if (parsed && parsed.value >= 0) {
+        return {
+          value: parsed.value,
+          rounded: parsed.precision === "DISPLAY_ROUNDED",
+        };
+      }
     }
   }
   // Fallback: metric row whose icon is a views icon → first numeric span.
@@ -103,12 +134,12 @@ function readCardViews(card: Element): { value?: number; rounded: boolean } {
       .map(textOf)
       .filter((t): t is string => t !== null);
     for (const s of spans) {
-      const m = s.match(/^([\d,]+(?:\.\d+)?)([KMB万亿])?$/i);
-      if (!m) continue;
-      const n = Number(m[1]!.replace(/,/g, ""));
-      if (!Number.isFinite(n)) continue;
-      if (m[2]) return { value: n, rounded: true }; // abbreviation without multiplier knowledge
-      return { value: n, rounded: false };
+      const parsed = parseDisplayMetric(s);
+      if (!parsed || parsed.value < 0) continue;
+      return {
+        value: parsed.value,
+        rounded: parsed.precision === "DISPLAY_ROUNDED",
+      };
     }
   }
   return { rounded: false };
@@ -145,7 +176,9 @@ function readCardDate(card: Element): string | null {
  * OUTSIDE the items container — look it up in the scope or its parent.
  */
 export function parseFamilyAVideos(root: ParentNode): ParsedContentVideo[] {
-  const feed = root.querySelector(HUB_FEED_SELECTOR);
+  // review R6: parse the ACTIVE page's hub — a retained (stale) Hub in a
+  // non-selected page shell is never the data source for the current collection.
+  const feed = activeContentMatches(root, HUB_FEED_SELECTOR)[0];
   if (!feed) return [];
 
   const out: ParsedContentVideo[] = [];

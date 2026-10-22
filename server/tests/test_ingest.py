@@ -202,3 +202,67 @@ def test_ingest_concurrent_same_collection_id(client, session_factory):
     with session_factory() as session:
         count = session.scalar(select(func.count()).select_from(Collection))
         assert count == 1
+
+
+def test_ingest_persists_warnings_for_partial(client, session_factory):
+    """review R8 (2026-10-22): warning reasons survive sync and persist."""
+    installation_id, token = _register(client)
+    warnings = [
+        {"code": "VIDEO_SCOPE_PARTIAL", "message": "Rendered shelf only"},
+        {
+            "code": "METRIC_CONTROL_MISSING",
+            "message": "subscriberDelta control not found on dashboard",
+        },
+    ]
+    response = client.post(
+        "/api/v1/collections",
+        headers={"Authorization": f"Bearer {token}"},
+        json=_payload(
+            installation_id,
+            collection_id="col-warn",
+            status="PARTIAL",
+            warnings=warnings,
+        ),
+    )
+    assert response.status_code == 201
+    with session_factory() as session:
+        row = session.get(Collection, "col-warn")
+        assert row is not None
+        stored = json.loads(row.payload_json)
+    assert stored["warnings"] == warnings
+
+
+def test_ingest_validates_warning_shape(client):
+    """A malformed warnings entry is rejected, never silently dropped (review R8)."""
+    installation_id, token = _register(client)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    missing_message = _payload(
+        installation_id,
+        collection_id="col-warn-bad-1",
+        warnings=[{"code": "VALIDATION"}],
+    )
+    assert (
+        client.post("/api/v1/collections", headers=headers, json=missing_message).status_code
+        == 422
+    )
+
+    empty_code = _payload(
+        installation_id,
+        collection_id="col-warn-bad-2",
+        warnings=[{"code": "", "message": "x"}],
+    )
+    assert (
+        client.post("/api/v1/collections", headers=headers, json=empty_code).status_code
+        == 422
+    )
+
+    not_a_list = _payload(
+        installation_id,
+        collection_id="col-warn-bad-3",
+        warnings={"code": "VALIDATION", "message": "x"},
+    )
+    assert (
+        client.post("/api/v1/collections", headers=headers, json=not_a_list).status_code
+        == 422
+    )

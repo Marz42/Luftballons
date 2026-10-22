@@ -9,6 +9,7 @@
       <th>Captured</th>
       <th>Collector</th>
       <th>Status</th>
+      <th>Warnings</th>
       <th>Received</th>
     </tr>
   </thead>
@@ -19,10 +20,11 @@
       <td>{{ item.captured_at }}</td>
       <td>{{ item.collector }} <span class="muted">schema {{ item.schema_version }}</span></td>
       <td>{{ item.status }}</td>
+      <td>{% if item.warning_codes %}<span class="muted">{{ item.warning_codes }}</span>{% else %}<span class="muted">—</span>{% endif %}</td>
       <td>{{ item.received_at }}</td>
     </tr>
   {% else %}
-    <tr><td colspan="5" class="muted">No collections yet.</td></tr>
+    <tr><td colspan="6" class="muted">No collections yet.</td></tr>
   {% endfor %}
   </tbody>
 </table>

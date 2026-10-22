@@ -10,7 +10,11 @@ export interface DomTarget {
   id: string;
   /** Adapter-owned constraint for calibrated CSS candidates. */
   matches?: (element: Element) => boolean;
-  /** Reject ambiguous calibrated targets instead of choosing the first. */
+  /**
+   * Reject ambiguous calibrated targets instead of choosing the first.
+   * Ambiguity (≥2 valid candidates in one branch) stops resolution entirely —
+   * lower-priority fallbacks are never consulted to "pick one" (review R3).
+   */
   unique?: boolean;
 
   ariaLabel?: string;
@@ -155,15 +159,23 @@ export function isDomVisible(el: Element): boolean {
 
 /**
  * Apply visibility + DomTarget.matches + unique across resolve branches.
+ * review R3 (2026-10-22): "missing" and "ambiguous" are distinct outcomes —
+ * ambiguity must TERMINATE resolution for unique targets instead of silently
+ * falling through to a lower-priority (wrong) fallback.
  * @param applyMatches When false (stable-attribute identity hits), skip matches —
  *   data-luftballons-target already identifies the node; matches is for CSS/semantic
  *   candidate disambiguation (keeps calibrated fixture shortcuts working).
  */
+type ConstrainResult =
+  | { kind: "found"; el: Element }
+  | { kind: "missing" }
+  | { kind: "ambiguous"; count: number };
+
 function constrainCandidates(
   candidates: Element[],
   target: DomTarget,
   applyMatches = true,
-): Element | null {
+): ConstrainResult {
   const filtered = candidates.filter((el) => {
     if (!target.ignoreVisibility && !isDomVisible(el)) {
       return false;
@@ -174,12 +186,12 @@ function constrainCandidates(
     return true;
   });
   if (filtered.length === 0) {
-    return null;
+    return { kind: "missing" };
   }
   if (target.unique && filtered.length > 1) {
-    return null;
+    return { kind: "ambiguous", count: filtered.length };
   }
-  return filtered[0] ?? null;
+  return { kind: "found", el: filtered[0]! };
 }
 
 /**
@@ -216,11 +228,24 @@ export function querySelectorAllDeep(
  * Resolve element by DomTarget priority (§9 / SPEC §13).
  * Semantic + CSS: visibility / matches / unique.
  * Stable attribute: visibility / unique (matches skipped — exact id identity).
+ *
+ * review R3 (2026-10-22): for `unique` targets an ambiguous branch STOPS
+ * resolution (→ null). The old code collapsed "missing" and "ambiguous" into
+ * null and kept falling through — two enabled Publish buttons resolved to
+ * whichever lower-priority selector matched one of them.
  */
 export function resolveDomTarget(
   target: DomTarget,
   root: ParentNode,
 ): Element | null {
+  /** Element = resolved; null = ambiguous stop; undefined = try next branch. */
+  const settle = (result: ConstrainResult): Element | null | undefined => {
+    if (result.kind === "found") {
+      return result.el;
+    }
+    return result.kind === "ambiguous" ? null : undefined;
+  };
+
   // 1) Semantic: ARIA / role / visible text
   if (hasSemantic(target)) {
     const semanticHits: Element[] = [];
@@ -230,8 +255,8 @@ export function resolveDomTarget(
         semanticHits.push(el);
       }
     }
-    const semantic = constrainCandidates(semanticHits, target, true);
-    if (semantic) {
+    const semantic = settle(constrainCandidates(semanticHits, target, true));
+    if (semantic !== undefined) {
       return semantic;
     }
   }
@@ -242,8 +267,8 @@ export function resolveDomTarget(
       `[data-luftballons-target="${cssEscape(target.id)}"]`,
     ),
   );
-  const byStable = constrainCandidates(stableHits, target, false);
-  if (byStable) {
+  const byStable = settle(constrainCandidates(stableHits, target, false));
+  if (byStable !== undefined) {
     return byStable;
   }
 
@@ -251,12 +276,14 @@ export function resolveDomTarget(
   const fallbacks = normalizeSelectorFallbacks(target.selectorFallback);
   for (const selector of fallbacks) {
     try {
-      const found = constrainCandidates(
-        Array.from(root.querySelectorAll(selector)),
-        target,
-        true,
+      const found = settle(
+        constrainCandidates(
+          Array.from(root.querySelectorAll(selector)),
+          target,
+          true,
+        ),
       );
-      if (found) {
+      if (found !== undefined) {
         return found;
       }
     } catch {

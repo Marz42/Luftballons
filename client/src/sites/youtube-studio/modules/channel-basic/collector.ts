@@ -127,8 +127,17 @@ function metricText(el: Element | null): string | null {
   return text.length > 0 ? text : null;
 }
 
-/** How a metric source read resolved. ABSENT = UI shows no value (e.g. 「—」). */
-type MetricRead = "VALUE" | "ABSENT" | "UNREADABLE";
+/**
+ * How a metric source read resolved.
+ * - VALUE: parsed number.
+ * - ABSENT: the UI itself shows no value (「—」「–」「— 无法比较」) — or, for a
+ *   control that rendered EMPTY (calibrated 2026-09-07: `.subscribers-trend`
+ *   is the no-value display of a real Dashboard). Legitimate absence (H5).
+ * - MISSING: no such control in the DOM after the settle window — NOT a
+ *   legitimate "no value" and must never silently become one (review R5).
+ * - UNREADABLE: text exists but cannot be parsed.
+ */
+type MetricRead = "VALUE" | "ABSENT" | "UNREADABLE" | "MISSING";
 
 function applyMetric(
   draft: DraftMetrics,
@@ -136,22 +145,34 @@ function applyMetric(
   raw: string | null,
   warnings: TaskWarning[],
   source: string,
+  controlPresent: boolean,
 ): MetricRead {
   const parsed = parseDisplayMetric(raw);
   if (!parsed) {
+    if (raw === null || raw.trim().length === 0) {
+      if (!controlPresent) {
+        // review R5 (2026-10-22): "control missing" used to fall into the
+        // placeholder bucket and produce a fake COMPLETE.
+        warn(
+          warnings,
+          "METRIC_CONTROL_MISSING",
+          `${field} control not found on ${source}; the page exposes no value node at all`,
+        );
+        return "MISSING";
+      }
+      // Control exists but renders blank — calibrated real-DOM no-value form.
+      return "ABSENT";
+    }
     // Placeholder (「—」「–」「— 无法比较」…) is "no value shown", not bad data.
     if (isDisplayPlaceholder(raw)) {
       return "ABSENT";
     }
-    if (raw !== null && raw.trim().length > 0) {
-      warn(
-        warnings,
-        "METRIC_UNPARSED",
-        `Could not parse ${field} from ${source}: "${raw}"`,
-      );
-      return "UNREADABLE";
-    }
-    return "ABSENT";
+    warn(
+      warnings,
+      "METRIC_UNPARSED",
+      `Could not parse ${field} from ${source}: "${raw}"`,
+    );
+    return "UNREADABLE";
   }
   if (field === "views") {
     if (parsed.value < 0) {
@@ -392,6 +413,20 @@ export async function runChannelBasicCollector(
       });
     }
   };
+  /**
+   * Metric read with control-presence evidence (review R5): a missing DOM
+   * control and a placeholder display are different facts and must not share
+   * one "ABSENT" bucket.
+   */
+  const readMetricEventually = async (
+    target: Parameters<CancellableDomService["readText"]>[0],
+  ): Promise<{ text: string | null; present: boolean }> => {
+    const text = await readTextEventually(target);
+    if (text !== null && !isDisplayPlaceholder(text)) {
+      return { text, present: true };
+    }
+    return { text, present: await deps.dom.exists(target) };
+  };
   const hasPayload = (): boolean =>
     draft.channelName.trim().length > 0 ||
     draft.views !== undefined ||
@@ -492,19 +527,25 @@ export async function runChannelBasicCollector(
       draft.periodLabel = periodRaw;
     }
 
+    const dashViews = await readMetricEventually(getTarget("dashboard.views"));
     const dashViewsRead = applyMetric(
       metrics,
       "views",
-      await readTextEventually(getTarget("dashboard.views")),
+      dashViews.text,
       warnings,
       "dashboard",
+      dashViews.present,
+    );
+    const dashDelta = await readMetricEventually(
+      getTarget("dashboard.subscriberDelta"),
     );
     const dashDeltaRead = applyMetric(
       metrics,
       "subscriberDelta",
-      await readTextEventually(getTarget("dashboard.subscriberDelta")),
+      dashDelta.text,
       warnings,
       "dashboard",
+      dashDelta.present,
     );
     if (metrics.views !== undefined) {
       draft.views = metrics.views;
@@ -537,8 +578,10 @@ export async function runChannelBasicCollector(
       const analyticsPeriod = await readTextEventually(getTarget("analytics.period"));
       const dates = periodDates(await readTextEventually(getTarget("analytics.dates")));
       const analytics: DraftMetrics = {};
-      const anViewsRead = applyMetric(analytics, "views", await readTextEventually(getTarget("analytics.views")), warnings, "analytics");
-      const anDeltaRead = applyMetric(analytics, "subscriberDelta", await readTextEventually(getTarget("analytics.subscriberDelta")), warnings, "analytics");
+      const anViews = await readMetricEventually(getTarget("analytics.views"));
+      const anViewsRead = applyMetric(analytics, "views", anViews.text, warnings, "analytics", anViews.present);
+      const anDelta = await readMetricEventually(getTarget("analytics.subscriberDelta"));
+      const anDeltaRead = applyMetric(analytics, "subscriberDelta", anDelta.text, warnings, "analytics", anDelta.present);
       // Never merge a dashboard metric with an unverified Analytics period.
       // If Analytics has values, use that page as the sole summary source.
       if (analytics.views !== undefined || analytics.subscriberDelta !== undefined) {
@@ -557,6 +600,17 @@ export async function runChannelBasicCollector(
         } else {
           warn(warnings, "ANALYTICS_PERIOD_UNKNOWN", "Analytics metrics omitted: date range was not readable");
         }
+      }
+
+      // review R5 + H5 synthesis (2026-10-22): an explicit placeholder display
+      // on EITHER consulted page is the UI's own "no value" evidence and keeps
+      // the field legitimately absent. Only a metric with NEITHER a value node
+      // NOR a placeholder anywhere is an unexplained absence (→ missingCore).
+      if (anViewsRead === "ABSENT" && draft.views === undefined) {
+        absentFields.add("views");
+      }
+      if (anDeltaRead === "ABSENT" && draft.subscriberDelta === undefined) {
+        absentFields.add("subscriberDelta");
       }
 
       if (draft.views === undefined && !absentFields.has("views")) {

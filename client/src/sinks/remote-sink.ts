@@ -109,6 +109,17 @@ function collectionToIngestBody(collection: Collection<unknown>): Record<string,
     captured_at: collection.capturedAt,
     status: collection.status,
     data: collection.data,
+    // review R8 (2026-10-22): sync must carry the warning reasons too — a
+    // PARTIAL stored locally with explanations arrived remotely as a bare
+    // status. Validated + persisted server-side (CollectionIngestRequest.warnings).
+    ...(collection.warnings && collection.warnings.length > 0
+      ? {
+          warnings: collection.warnings.map((w) => ({
+            code: w.code,
+            message: w.message,
+          })),
+        }
+      : {}),
   };
 }
 

@@ -206,7 +206,37 @@ export const SUBTITLE_LABEL_TO_CODE: Readonly<Record<string, string>> = {
   "Português (Brasil)": "pt-BR",
   "葡萄牙语（巴西）": "pt-BR",
   "葡萄牙语(巴西)": "pt-BR",
+  /**
+   * review R2 (2026-10-22): regional variants keep their region identity —
+   * 英语（美国）must NOT collapse into en (Studio treats the rows as distinct).
+   */
+  "英语（美国）": "en-US",
+  "英语(美国)": "en-US",
+  "English (US)": "en-US",
+  "English (United States)": "en-US",
+  "英语（英国）": "en-GB",
+  "英语(英国)": "en-GB",
+  "English (UK)": "en-GB",
+  "English (United Kingdom)": "en-GB",
 };
+
+/**
+ * True when two Studio language codes identify the same captions language for
+ * matching purposes: equal (case-insensitive) or base↔variant (en ↔ en-US,
+ * pt ↔ pt-BR, zh ↔ zh-Hans). Distinct variants (zh-Hans vs zh-Hant,
+ * en-US vs en-GB) never match.
+ *
+ * review R2: row parsing preserves region identity (pt-BR, en-US), so every
+ * code comparison in the workflow must accept base↔variant — otherwise a
+ * 英语（美国）row would stop matching an `en` target.
+ */
+export function languageCodeMatches(a: string, b: string): boolean {
+  const x = a.trim().toLowerCase();
+  const y = b.trim().toLowerCase();
+  if (!x || !y) return false;
+  if (x === y) return true;
+  return x.startsWith(`${y}-`) || y.startsWith(`${x}-`);
+}
 
 /** Preferred picker search / display aliases per code (zh-Hans first). */
 export function labelAliasesForLanguage(lang: SubtitleLanguage): string[] {
@@ -218,6 +248,14 @@ export function labelAliasesForLanguage(lang: SubtitleLanguage): string[] {
     case "en":
       aliases.add("英语");
       aliases.add("English");
+      break;
+    case "en-us":
+      aliases.add("英语（美国）");
+      aliases.add("English (US)");
+      break;
+    case "en-gb":
+      aliases.add("英语（英国）");
+      aliases.add("English (UK)");
       break;
     case "ja":
       aliases.add("日语");
@@ -352,55 +390,79 @@ export interface LanguageListParseResult {
   detail?: string;
 }
 
-/** Strip Studio parentheticals e.g. `英语 （视频语言）` → `英语`. */
+/**
+ * Studio STATUS annotations appended to a language name — never identity.
+ * review R2 (2026-10-22): only these are strippable. Identity qualifiers
+ * （简体）（繁体）（巴西）（美国）… carry script/region identity and must survive.
+ */
+const STATUS_ANNOTATION =
+  /\s*[（(](?:视频语言|video language|草稿|draft|已发布|published|pending)[）)]\s*$/iu;
+
+/**
+ * Strip Studio status chrome e.g. `英语 （视频语言）` → `英语`,
+ * `韩语（草稿）` → `韩语`. Identity parens are never touched (review R2 —
+ * the old code stripped ANY trailing parenthetical and collapsed
+ * 中文（简体）→ 中文 / 葡萄牙语（巴西）→ 葡萄牙语).
+ */
 export function normalizeSubtitleLanguageLabel(label: string): string {
-  return label
-    .replace(/\s+/g, " ")
-    .trim()
-    .replace(/\s*[（(][^）)]*[）)]\s*$/u, "")
-    .trim();
+  let text = label.replace(/\s+/g, " ").trim();
+  for (;;) {
+    const next = text.replace(STATUS_ANNOTATION, "").trim();
+    if (next === text) {
+      return text;
+    }
+    text = next;
+  }
+}
+
+function lookupLabelExact(label: string): string | null {
+  const hit = SUBTITLE_LABEL_TO_CODE[label];
+  if (hit) return hit;
+  const lower = label.toLowerCase();
+  for (const [k, v] of Object.entries(SUBTITLE_LABEL_TO_CODE)) {
+    if (k.toLowerCase() === lower) {
+      return v;
+    }
+  }
+  return null;
 }
 
 export function resolveLanguageCodeFromLabel(label: string): string | null {
-  const candidates = [label, normalizeSubtitleLanguageLabel(label)]
-    .map((s) => s.replace(/\s+/g, " ").trim())
-    .filter((s, i, arr) => s.length > 0 && arr.indexOf(s) === i);
-
-  for (const trimmed of candidates) {
-    if (SUBTITLE_LABEL_TO_CODE[trimmed]) {
-      return SUBTITLE_LABEL_TO_CODE[trimmed]!;
-    }
-    const lower = trimmed.toLowerCase();
-    for (const [k, v] of Object.entries(SUBTITLE_LABEL_TO_CODE)) {
-      if (k.toLowerCase() === lower) {
-        return v;
-      }
+  const primary = label.replace(/\s+/g, " ").trim();
+  if (!primary) {
+    return null;
+  }
+  const exact = lookupLabelExact(primary);
+  if (exact) {
+    return exact;
+  }
+  // Strip trailing STATUS chrome (视频语言 / 草稿 / …) and retry — identity
+  // qualifiers stay part of the label (中文（简体）, 葡萄牙语（巴西）, 英语（美国）).
+  const stripped = normalizeSubtitleLanguageLabel(primary);
+  if (stripped !== primary) {
+    const afterStrip = lookupLabelExact(stripped);
+    if (afterStrip) {
+      return afterStrip;
     }
   }
-
-  // Table rows often append status chrome after the language name
-  // (e.g. "韩语 草稿"). Prefer longest known label as prefix.
+  // Table rows may append status TEXT after the name ("韩语 草稿",
+  // "韩语 已发布2026年10月21日"). Longest known label as prefix, whitespace
+  // boundary ONLY — a following （…） is identity (简体/繁体/地区), so
+  // 英语（美国）must not collapse into en (review R2).
   const keys = Object.keys(SUBTITLE_LABEL_TO_CODE).sort(
     (a, b) => b.length - a.length,
   );
-  for (const trimmed of candidates) {
-    const lower = trimmed.toLowerCase();
-    for (const k of keys) {
-      const kl = k.toLowerCase();
-      if (
-        trimmed.startsWith(k) &&
-        (trimmed.length === k.length ||
-          /[\s（(]/.test(trimmed.charAt(k.length)))
-      ) {
-        return SUBTITLE_LABEL_TO_CODE[k]!;
-      }
-      if (
-        lower.startsWith(kl) &&
-        (lower.length === kl.length ||
-          /[\s（(]/.test(lower.charAt(kl.length)))
-      ) {
-        return SUBTITLE_LABEL_TO_CODE[k]!;
-      }
+  for (const k of keys) {
+    const kl = k.toLowerCase();
+    const lower = primary.toLowerCase();
+    const isPrefix =
+      primary.startsWith(k) || (lower.startsWith(kl) && kl.length === k.length);
+    if (!isPrefix) {
+      continue;
+    }
+    const boundary = primary.charAt(k.length);
+    if (primary.length === k.length || /\s/.test(boundary)) {
+      return SUBTITLE_LABEL_TO_CODE[k]!;
     }
   }
   return null;

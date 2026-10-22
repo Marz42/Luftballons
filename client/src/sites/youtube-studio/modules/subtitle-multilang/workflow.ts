@@ -31,9 +31,11 @@ import {
   formatOutcomesSummary,
   isCaptionsPublishedState,
   labelAliasesForLanguage,
+  languageCodeMatches,
   needsCaptionsResume,
   pickerFilterQueryForLanguage,
   resolveLanguageCodeFromLabel,
+  SUBTITLE_LABEL_TO_CODE,
   type CaptionsTranslatePhase,
   type LanguageListParseResult,
   type LanguageOutcome,
@@ -174,16 +176,20 @@ function languageCodeFromElement(el: Element): {
       ".language-text, .tablecell-language, button.language-display-name, [class*='language']",
     ) ?? el;
   const raw = (nameCell.textContent ?? "").replace(/\s+/g, " ").trim();
-  // Strip fixture `(pending)` and live Studio `（视频语言）` / `(Video language)`.
+  // Strip ONLY the fixture marker `(pending)`. review R2 (2026-10-22): the old
+  // unconditional trailing-paren strip destroyed identity qualifiers before
+  // lookup (中文（简体）→ 中文, 葡萄牙语（巴西）→ 葡萄牙语) and collapsed
+  // regional variants. Status chrome (视频语言/草稿/…) is stripped inside the
+  // shared resolver; identity parens must survive.
   const text = raw
     .replace(/\s*\(pending\)\s*/gi, " ")
     .replace(/\s+/g, " ")
-    .replace(/\s*[（(][^）)]*[）)]\s*$/u, "")
     .trim();
   if (!text) {
     return { code: null, unparseable: true };
   }
-  const mapped = resolveLanguageCodeFromLabel(text);
+  const mapped =
+    resolveLanguageCodeFromLabel(text) ?? resolveLanguageCodeFromLabel(raw);
   if (mapped) {
     return { code: mapped, unparseable: false };
   }
@@ -690,7 +696,7 @@ async function findUniqueLanguageRow(
   const matches: Element[] = [];
   for (const el of collectRowElements(list)) {
     const mapped = languageCodeFromElement(el);
-    if (mapped.code?.toLowerCase() === lang.code.toLowerCase()) {
+    if (mapped.code !== null && languageCodeMatches(mapped.code, lang.code)) {
       matches.push(el);
       continue;
     }
@@ -828,7 +834,7 @@ function optionTargetFor(lang: SubtitleLanguage): DomTarget {
         el.getAttribute("data-language-code") ??
         el.getAttribute("data-luftballons-subtitle-lang") ??
         el.getAttribute("test-id");
-      if (code && code.toLowerCase() === lang.code.toLowerCase()) {
+      if (code && languageCodeMatches(code, lang.code)) {
         return true;
       }
       const text = (el.textContent ?? "").replace(/\s+/g, " ").trim();
@@ -1062,7 +1068,7 @@ export async function waitCaptionsEntrySurface(
           continue;
         }
         const mapped = languageCodeFromElement(el);
-        if (mapped.code?.toLowerCase() === lang.code.toLowerCase()) {
+        if (mapped.code !== null && languageCodeMatches(mapped.code, lang.code)) {
           return "list_row_hover";
         }
         const text = (el.textContent ?? "").replace(/\s+/g, " ").trim();
@@ -1373,10 +1379,13 @@ export function editorLanguageBinding(
     push(el.getAttribute("data-language-code"));
     push(el.getAttribute("data-luftballons-subtitle-lang"));
   }
-  const want = lang.code.toLowerCase();
   if (codes.size > 0) {
-    // All observed codes must be the target code — nothing else (audit #3).
-    return [...codes].every((c) => c === want) ? "match" : "mismatch";
+    // All observed codes must identify the target language — nothing else
+    // (audit #3). review R2: base↔variant forms count as the same language
+    // (en ↔ en-US); truly foreign codes are still a mismatch.
+    return [...codes].every((c) => languageCodeMatches(c, lang.code))
+      ? "match"
+      : "mismatch";
   }
 
   const aliases = labelAliasesForLanguage(lang).filter(isUsableTextAlias);
@@ -1397,25 +1406,18 @@ export function editorLanguageBinding(
   if (selfHit) {
     return "match";
   }
-  // Another language's label in the chrome → mismatch.
-  for (const other of [
-    { code: "en", label: "English" },
-    { code: "ja", label: "日本語" },
-    { code: "ko", label: "한국어" },
-    { code: "fr", label: "Français" },
-    { code: "de", label: "Deutsch" },
-    { code: "es", label: "Español" },
-    { code: "ar", label: "العربية" },
-    { code: "zh-Hans", label: "中文（简体）" },
-    { code: "zh-Hant", label: "中文（繁体）" },
-  ] as SubtitleLanguage[]) {
-    if (other.code.toLowerCase() === want) {
+  // review R1 (2026-10-22): identify foreign languages with the SAME shared
+  // catalog used for the target language. The old hard-coded 9-language list
+  // missed pt/it/ru/… — a Portuguese editor passed as "unknown" and a
+  // wrong-language surface was accepted as READY for the target language.
+  for (const [label, code] of Object.entries(SUBTITLE_LABEL_TO_CODE)) {
+    if (languageCodeMatches(code, lang.code)) {
       continue;
     }
-    const otherAliases = labelAliasesForLanguage(other).filter(
-      isUsableTextAlias,
-    );
-    if (otherAliases.some((a) => aliasMatchesText(hay, a))) {
+    if (!isUsableTextAlias(label)) {
+      continue;
+    }
+    if (aliasMatchesText(hay, label)) {
       return "mismatch";
     }
   }
@@ -1944,7 +1946,7 @@ function hasLanguageScopedReadyMarker(lang: SubtitleLanguage): boolean {
     const code =
       el.getAttribute("data-language-code") ??
       el.getAttribute("data-luftballons-subtitle-lang");
-    return !code || code.toLowerCase() === lang.code.toLowerCase();
+    return !code || languageCodeMatches(code, lang.code);
   });
   return anyReady.length === 1;
 }
@@ -2069,7 +2071,7 @@ async function autoTranslateAndPublish(
   throwIfAborted(signal);
   assertBinding();
 
-  const actionDom = actionDomForLanguage(dom, lang);
+  let actionDom = actionDomForLanguage(dom, lang);
 
   if (!opts?.skipAutoTranslateClick) {
     const auto = getSubtitleTarget("subtitle.auto_translate");
@@ -2087,30 +2089,37 @@ async function autoTranslateAndPublish(
   }
 
   const publish = getSubtitleTarget("subtitle.publish");
+  // review R7 (2026-10-22): publish availability belongs to the SAME budget as
+  // the translation READY wait. The old separate 8s pre-wait failed the whole
+  // task while Studio legitimately kept 发布 disabled during translation
+  // (the 90s window never covered that path). "Control exists" and
+  // "submittable" are detected separately and BOTH must hold before the click.
+  const budgetMs = deps.captionsReadyTimeoutMs ?? CAPTIONS_READY_TIMEOUT_MS;
+  const waitStartedAt = Date.now();
+  await waitUntilCaptionsReady(
+    dom,
+    lang,
+    signal,
+    budgetMs,
+    humanGate,
+    deps.onProgress,
+  );
+  throwIfAborted(signal);
+  assertBinding();
+  // review R1 recommendation (2026-10-22): re-derive the action scope right
+  // before publish — this RE-CHECKS the language binding (a mismatched editor
+  // refuses here) and repairs a stale host scope if Studio swapped the editor
+  // surface between 自动翻译 and 发布.
+  actionDom = actionDomForLanguage(dom, lang);
+  const remainingMs = Math.max(1_000, budgetMs - (Date.now() - waitStartedAt));
   try {
-    await actionDom.waitFor(publish, 8_000, signal);
+    await actionDom.waitFor(publish, remainingMs, signal);
   } catch (error) {
     if (isAbortError(error) || signal.aborted) {
       throw error;
     }
     throw new WaitTimeoutError(
       "Publish (发布) did not become available after 自动翻译",
-    );
-  }
-
-  await waitUntilCaptionsReady(
-    dom,
-    lang,
-    signal,
-    deps.captionsReadyTimeoutMs ?? CAPTIONS_READY_TIMEOUT_MS,
-    humanGate,
-    deps.onProgress,
-  );
-  throwIfAborted(signal);
-  assertBinding();
-  if (!(await actionDom.exists(publish))) {
-    throw new WaitTimeoutError(
-      "Publish (发布) disappeared while waiting for captions READY",
     );
   }
 
