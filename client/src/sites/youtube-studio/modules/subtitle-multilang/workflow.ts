@@ -815,7 +815,24 @@ function isDisabledControl(el: Element): boolean {
   return host !== null;
 }
 
-function optionTargetFor(lang: SubtitleLanguage): DomTarget {
+/**
+ * Picker option target for one language.
+ *
+ * Live 2026-10-22: Studio lists a BASE option plus regional variants per
+ * language — 德语 `de` + 德语（德国）`de-DE` + 德语（奥地利）`de-AT` +
+ * 德语（瑞士）`de-CH` (same for 法语 ×5, 西班牙语 ×5 …; `test-id` carries the
+ * BCP-47 code). Base↔variant code compatibility therefore matches MANY
+ * options at once and `unique` refuses them all.
+ *
+ * - "exact": the option whose code EQUALS the target (or whose label equals a
+ *   target alias) — 德语 for `de`, 德语（德国） for `de-DE`. Preferred.
+ * - "variant": base↔variant compatible — only ever accepted when unambiguous
+ *   (resolveDomTarget `unique` semantics refuse multiples).
+ */
+function optionTargetFor(
+  lang: SubtitleLanguage,
+  mode: "exact" | "variant" = "exact",
+): DomTarget {
   const labelAliases = labelAliasesForLanguage(lang);
 
   // Prefer stable option markers — never bare language rows (P1-2).
@@ -855,8 +872,14 @@ function optionTargetFor(lang: SubtitleLanguage): DomTarget {
         el.getAttribute("data-language-code") ??
         el.getAttribute("data-luftballons-subtitle-lang") ??
         el.getAttribute("test-id");
-      if (code && languageCodeMatches(code, lang.code)) {
-        return true;
+      if (code) {
+        const codeHit =
+          mode === "exact"
+            ? code.trim().toLowerCase() === lang.code.trim().toLowerCase()
+            : languageCodeMatches(code, lang.code);
+        if (codeHit) {
+          return true;
+        }
       }
       const text = (el.textContent ?? "").replace(/\s+/g, " ").trim();
       if (!text || text.length > 40) {
@@ -865,6 +888,18 @@ function optionTargetFor(lang: SubtitleLanguage): DomTarget {
       for (const alias of labelAliases) {
         if (alias && text === alias) {
           return true;
+        }
+      }
+      if (mode === "variant") {
+        // 德语（德国） style variant labels for a base target.
+        for (const alias of labelAliases) {
+          if (
+            alias &&
+            text.startsWith(alias) &&
+            /[\s（(]/.test(text.charAt(alias.length))
+          ) {
+            return true;
+          }
         }
       }
       return false;
@@ -910,29 +945,32 @@ async function findLanguageOption(
   timeoutMs = 3_000,
 ): Promise<Element> {
   const pickerDom = scopedDom(picker);
-  const option = optionTargetFor(lang);
+  // Live 2026-10-22: the exact base option (德语 `de`) always exists next to
+  // regional variants — take exact-code/label first; fall back to
+  // variant-compatible matching only when it is unambiguous.
+  const exactOption = optionTargetFor(lang, "exact");
+  const variantOption = optionTargetFor(lang, "variant");
   await filterPickerForLanguage(picker, lang, signal);
   const deadline = Date.now() + timeoutMs;
-  let lastError: unknown;
   while (Date.now() <= deadline) {
     throwIfAborted(signal);
-    try {
-      return await pickerDom.waitFor(option, 200, signal);
-    } catch (error) {
-      if (isAbortError(error) || signal.aborted) {
-        throw error;
+    for (const option of [exactOption, variantOption]) {
+      try {
+        return await pickerDom.waitFor(option, 200, signal);
+      } catch (error) {
+        if (isAbortError(error) || signal.aborted) {
+          throw error;
+        }
       }
-      lastError = error;
-      // Scroll catalog if virtualized / long list.
-      const scrollParent =
-        picker.querySelector("[scrollable], .scrollable, #scroller") ?? picker;
-      if (scrollParent instanceof HTMLElement) {
-        scrollParent.scrollTop += 120;
-      }
-      await abortableDelay(40, signal);
     }
+    // Scroll catalog if virtualized / long list.
+    const scrollParent =
+      picker.querySelector("[scrollable], .scrollable, #scroller") ?? picker;
+    if (scrollParent instanceof HTMLElement) {
+      scrollParent.scrollTop += 120;
+    }
+    await abortableDelay(40, signal);
   }
-  void lastError;
   throw new WaitTimeoutError(
     `Language option not ready for ${lang.code} inside open picker`,
   );

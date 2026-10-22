@@ -926,6 +926,49 @@ describe("youtube.subtitle.multilang (FT-011 / P4-T1…T5)", () => {
     expect(runner.getState(id), summary).toBe("COMPLETED");
   }, 15_000);
 
+  it("P1-live: regional picker variants never shadow the base option (2026-10-22)", async () => {
+    // Real picker lists 德语 `de` + 德语（德国）`de-DE` + … — base↔variant
+    // compatibility matched ALL of them and `unique` refused the whole set
+    // ("Language option not ready"). Options carry test-id codes in the real
+    // DOM (no data-language-code), so model that shape here.
+    fixture = mountStudioFixture({
+      page: "VIDEO_DETAILS",
+      subtitles: {
+        existingLanguages: [],
+        pickerLanguages: [
+          { code: "de-AT", label: "德语（奥地利）" },
+          { code: "de", label: "德语" },
+          { code: "de-DE", label: "德语（德国）" },
+          { code: "de-CH", label: "德语（瑞士）" },
+        ],
+      },
+    });
+    for (const opt of document.querySelectorAll<HTMLElement>(
+      "[data-luftballons-subtitle-option]",
+    )) {
+      const code = opt.getAttribute("data-language-code");
+      if (code) {
+        opt.setAttribute("test-id", code);
+        opt.removeAttribute("data-language-code");
+        opt.setAttribute("role", "option");
+      }
+    }
+    const runner = makeRunner(
+      createFixtureSubtitleModule(fixture, {
+        initialLanguages: [{ code: "de", label: "Deutsch" }],
+      }),
+      createAutoApproveGate(),
+    );
+    const id = await runner.start("youtube.subtitle.multilang");
+    await vi.waitFor(() =>
+      expect(["COMPLETED", "PARTIAL", "FAILED"]).toContain(runner.getState(id)),
+    { timeout: 12_000 });
+    const summary = runner.getSnapshot(id).result?.summary ?? "";
+    expect(runner.getState(id), summary).toBe("COMPLETED");
+    expect(summary).toMatch(/Deutsch\(de\) SUCCESS/);
+    expect(fixture.clickCounts.option).toBe(1);
+  }, 15_000);
+
   it("P1-live: disabled (grey) auto-translate is skipped → publish still succeeds", async () => {
     fixture = mountStudioFixture({
       page: "VIDEO_DETAILS",
