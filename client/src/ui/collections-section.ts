@@ -12,7 +12,7 @@ function text(el: HTMLElement, value: string): void {
 
 function formatSummaryLine(row: CollectionSummary): string {
   const count =
-    row.itemCount !== undefined ? `${row.itemCount} items` : "no item count";
+    row.itemCount !== undefined ? `${row.itemCount} 条` : "条目数未知";
   return `${row.capturedAt} · ${row.collector} · ${row.status} · ${count}`;
 }
 
@@ -34,7 +34,7 @@ export function createCollectionsSection(
 
   const title = document.createElement("div");
   title.className = "lb-section-title";
-  text(title, "Collections");
+  text(title, "采集记录");
 
   const listBox = document.createElement("div");
   listBox.className = "lb-collections-list";
@@ -42,7 +42,7 @@ export function createCollectionsSection(
 
   const empty = document.createElement("div");
   empty.className = "lb-collections-empty";
-  text(empty, "No collections yet. Run a collector to save local data.");
+  text(empty, "暂无采集记录。运行采集任务后，数据将保存在本地。");
 
   const errorBox = document.createElement("div");
   errorBox.className = "lb-error";

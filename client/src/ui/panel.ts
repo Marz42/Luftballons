@@ -40,6 +40,56 @@ function text(el: HTMLElement, value: string): void {
   el.textContent = value;
 }
 
+/** Red balloon brand mark (2026-10-22 requirement). */
+function balloonIcon(size = 18): SVGSVGElement {
+  const NS = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(NS, "svg");
+  svg.setAttribute("width", String(size));
+  svg.setAttribute("height", String(size));
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("aria-hidden", "true");
+  svg.setAttribute("focusable", "false");
+  svg.setAttribute("class", "lb-balloon");
+  const body = document.createElementNS(NS, "path");
+  body.setAttribute(
+    "d",
+    "M12 2.2c-3.4 0-6.1 2.9-6.1 6.6 0 3.3 2.2 6.1 4.5 7.6h3.2c2.3-1.5 4.5-4.3 4.5-7.6 0-3.7-2.7-6.6-6.1-6.6z",
+  );
+  body.setAttribute("fill", "#d93025");
+  const knot = document.createElementNS(NS, "path");
+  knot.setAttribute("d", "M10.7 16.4h2.6L12 18.3z");
+  knot.setAttribute("fill", "#a50e0e");
+  const string = document.createElementNS(NS, "path");
+  string.setAttribute("d", "M12 18.3c1.3 1.2 1.3 2.5 0 3.7");
+  string.setAttribute("stroke", "#a50e0e");
+  string.setAttribute("stroke-width", "1.3");
+  string.setAttribute("stroke-linecap", "round");
+  string.setAttribute("fill", "none");
+  svg.append(body, knot, string);
+  return svg;
+}
+
+/** Balloon + brand text as the toggle/title content. */
+function brandLabel(host: HTMLElement, suffix = ""): void {
+  host.replaceChildren();
+  host.append(
+    balloonIcon(),
+    document.createTextNode(`Luftballons${suffix}`),
+  );
+}
+
+/** 任务状态的中文显示名（内部状态码保持英文）。 */
+const STATE_LABELS: Record<string, string> = {
+  IDLE: "空闲",
+  RUNNING: "运行中",
+  WAITING: "等待中",
+  WAITING_HUMAN: "等待人工确认",
+  COMPLETED: "已完成",
+  PARTIAL: "部分完成",
+  FAILED: "失败",
+  CANCELLED: "已取消",
+};
+
 export async function mountLuftballonsPanel(
   runtime: Runtime,
   mountParent: ParentNode = document.documentElement,
@@ -59,7 +109,7 @@ export async function mountLuftballonsPanel(
   const toggle = document.createElement("button");
   toggle.type = "button";
   toggle.className = "lb-toggle";
-  text(toggle, "Luftballons");
+  brandLabel(toggle);
 
   const panel = document.createElement("div");
   panel.className = "lb-panel";
@@ -67,25 +117,25 @@ export async function mountLuftballonsPanel(
 
   const title = document.createElement("h1");
   title.className = "lb-title";
-  text(title, "Luftballons");
+  brandLabel(title);
 
   const sub = document.createElement("p");
   sub.className = "lb-sub";
-  text(sub, `Runtime ${runtime.version} · local-first · human-triggered`);
+  text(sub, `运行时 ${runtime.version} · 本地优先 · 人工触发`);
 
   const modulesTitle = document.createElement("div");
   modulesTitle.className = "lb-section-title";
-  text(modulesTitle, "Modules");
+  text(modulesTitle, "模块");
 
   const modulesBox = document.createElement("div");
 
   const taskTitle = document.createElement("div");
   taskTitle.className = "lb-section-title";
-  text(taskTitle, "Task");
+  text(taskTitle, "任务");
 
   const statusBox = document.createElement("div");
   statusBox.className = "lb-status";
-  text(statusBox, "Idle — no task running");
+  text(statusBox, "空闲 — 暂无任务");
 
   const errorBox = document.createElement("div");
   errorBox.className = "lb-error";
@@ -94,7 +144,7 @@ export async function mountLuftballonsPanel(
   const cancelBtn = document.createElement("button");
   cancelBtn.type = "button";
   cancelBtn.className = "lb-btn lb-btn-cancel";
-  text(cancelBtn, "Cancel");
+  text(cancelBtn, "取消");
   cancelBtn.disabled = true;
 
   const collections = createCollectionsSection(runtime);
@@ -128,22 +178,23 @@ export async function mountLuftballonsPanel(
 
   const renderStatus = (snapshot: TaskSnapshot | null): void => {
     if (!snapshot) {
-      text(statusBox, "Idle — no task running");
+      text(statusBox, "空闲 — 暂无任务");
       cancelBtn.disabled = true;
       activeTaskId = null;
       return;
     }
     activeTaskId = snapshot.taskId;
     const progress = snapshot.progressMessage ?? "";
+    const stateText = STATE_LABELS[snapshot.state] ?? snapshot.state;
     text(
       statusBox,
       [
-        `Module: ${snapshot.moduleId}`,
-        `State: ${snapshot.state}`,
-        progress ? `Progress: ${progress}` : "",
-        snapshot.result ? `Result: ${snapshot.result.summary}` : "",
+        `模块：${snapshot.moduleId}`,
+        `状态：${stateText}`,
+        progress ? `进度：${progress}` : "",
+        snapshot.result ? `结果：${snapshot.result.summary}` : "",
         ...(snapshot.result?.warnings?.map(
-          (w) => `Warning [${w.code}]: ${w.message}`,
+          (w) => `警告 [${w.code}]：${w.message}`,
         ) ?? []),
       ]
         .filter(Boolean)
@@ -216,10 +267,10 @@ export async function mountLuftballonsPanel(
     custom.className = "lb-lang-custom";
     const codeInput = document.createElement("input");
     codeInput.setAttribute("data-lb-custom-code", "true");
-    codeInput.placeholder = "code";
+    codeInput.placeholder = "语言代码";
     const labelInput = document.createElement("input");
     labelInput.setAttribute("data-lb-custom-label", "true");
-    labelInput.placeholder = "label";
+    labelInput.placeholder = "显示名称";
     custom.append(codeInput, labelInput);
 
     block.append(list, custom);
@@ -241,7 +292,7 @@ export async function mountLuftballonsPanel(
       meta.className = "lb-module-meta";
       let availText: string;
       if (row.availability.available) {
-        availText = `available · ${row.id}`;
+        availText = `可用 · ${row.id}`;
       } else if (row.availability.reason === "DISABLED") {
         const detail =
           typeof row.availability.metadata?.detail === "string"
@@ -249,9 +300,9 @@ export async function mountLuftballonsPanel(
             : typeof row.availability.metadata?.cause === "string"
               ? String(row.availability.metadata.cause)
               : "远端禁用";
-        availText = `DISABLED（${detail}） · ${row.id}`;
+        availText = `已禁用（${detail}） · ${row.id}`;
       } else {
-        availText = `unavailable (${row.availability.reason ?? "unknown"}) · ${row.id}`;
+        availText = `不可用（${row.availability.reason ?? "未知原因"}） · ${row.id}`;
       }
       text(meta, availText);
 
@@ -270,7 +321,7 @@ export async function mountLuftballonsPanel(
           ? "采集频道数据"
           : row.id === "youtube.subtitle.multilang"
             ? "添加多语言字幕"
-            : "Start",
+            : "开始",
       );
       startBtn.disabled = !row.availability.available || isBusy();
       startBtn.addEventListener("click", () => {
@@ -325,7 +376,7 @@ export async function mountLuftballonsPanel(
   toggle.addEventListener("click", () => {
     open = !open;
     panel.hidden = !open;
-    text(toggle, open ? "Luftballons ▾" : "Luftballons");
+    brandLabel(toggle, open ? " ▾" : "");
     if (open) {
       void refreshAvailability();
       void collections.refresh();
@@ -364,7 +415,7 @@ export async function mountLuftballonsPanel(
     open(): void {
       open = true;
       panel.hidden = false;
-      text(toggle, "Luftballons ▾");
+      brandLabel(toggle, " ▾");
       void refreshAvailability();
       void collections.refresh();
       server.refresh();
@@ -372,7 +423,7 @@ export async function mountLuftballonsPanel(
     close(): void {
       open = false;
       panel.hidden = true;
-      text(toggle, "Luftballons");
+      brandLabel(toggle);
     },
     destroy(): void {
       unsubscribe();

@@ -22,6 +22,10 @@ import {
   type SubtitleLanguage,
 } from "./schema.js";
 import {
+  loadLastPublishedLanguages,
+  saveLastPublishedLanguages,
+} from "../../../../services/language-prefs.js";
+import {
   runSubtitleMultilangWorkflow,
   type SubtitleWorkflowDeps,
 } from "./workflow.js";
@@ -83,11 +87,16 @@ export function createSubtitleMultilangModule(
     (() => (typeof location !== "undefined" ? location.href : ""));
 
   let targetLanguages: SubtitleLanguage[] =
-    options.initialLanguages ?? defaultTargetLanguages();
+    // 2026-10-22 requirement: default to the languages of the LAST successful
+    // publish (e.g. en/ja/de last time → same set checked next time); fall
+    // back to the product defaults on first run.
+    options.initialLanguages ??
+    loadLastPublishedLanguages() ??
+    defaultTargetLanguages();
 
   return {
     id: "youtube.subtitle.multilang",
-    name: "YouTube Multilingual Subtitle",
+    name: "YouTube 多语言字幕",
     version: "0.1.0",
     site: "youtube-studio",
     capabilities: SUBTITLE_CAPS,
@@ -167,6 +176,9 @@ export function createSubtitleMultilangModule(
           ...(options.captionsReadyTimeoutMs !== undefined
             ? { captionsReadyTimeoutMs: options.captionsReadyTimeoutMs }
             : {}),
+          onPublishedLanguages: (langs: SubtitleLanguage[]) => {
+            saveLastPublishedLanguages(langs);
+          },
         };
         return await runSubtitleMultilangWorkflow(ctx, deps);
       } catch (error) {

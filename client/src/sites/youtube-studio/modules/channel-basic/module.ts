@@ -49,7 +49,7 @@ export function createChannelBasicModule(
 
   return {
     id: "youtube.channel.basic",
-    name: "YouTube Basic Channel Collector",
+    name: "YouTube 频道基础采集",
     version: "0.1.0",
     site: "youtube-studio",
     capabilities: CHANNEL_CAPS,

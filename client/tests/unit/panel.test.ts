@@ -55,7 +55,7 @@ describe("Luftballons panel UI", () => {
     const meta = [...(shadow?.querySelectorAll(".lb-module-meta") ?? [])].map(
       (el) => el.textContent ?? "",
     );
-    expect(meta.some((t) => t.includes("available"))).toBe(true);
+    expect(meta.some((t) => t.includes("可用"))).toBe(true);
     expect(meta.some((t) => t.includes("youtube.channel.basic"))).toBe(true);
 
     const startLabels = [
@@ -159,7 +159,7 @@ describe("Luftballons panel UI", () => {
     ) as HTMLElement;
     expect(statusBox).toBeTruthy();
     const idleText = statusBox.textContent ?? "";
-    expect(idleText).toMatch(/Idle/i);
+    expect(idleText).toMatch(/空闲/);
 
     panel.destroy();
     panel = undefined;

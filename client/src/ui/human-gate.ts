@@ -61,11 +61,11 @@ export function createPanelHumanGate(): PanelHumanGate {
 
     const irrev = document.createElement("p");
     irrev.className = "lb-gate-irreversible";
-    text(irrev, "不可撤销 — this WRITE_COMMIT cannot be undone from Luftballons.");
+    text(irrev, "不可撤销 —— 本次写入操作（WRITE_COMMIT）无法从 Luftballons 撤销。");
 
     const listTitle = document.createElement("div");
     listTitle.className = "lb-gate-list-title";
-    text(listTitle, "Consequences");
+    text(listTitle, "影响与后果");
 
     const list = document.createElement("ul");
     list.className = "lb-gate-list";

@@ -75,6 +75,11 @@ export interface SubtitleWorkflowDeps {
   onProgress?: (message: string) => void;
   /** Override the READY wait budget (default CAPTIONS_READY_TIMEOUT_MS). */
   captionsReadyTimeoutMs?: number;
+  /**
+   * Called once per run with the languages that actually PUBLISHED (≥1
+   * SUCCESS). The panel uses it to pre-check the same set next run.
+   */
+  onPublishedLanguages?: (langs: SubtitleLanguage[]) => void;
 }
 
 function isAbortError(error: unknown): boolean {
@@ -384,6 +389,14 @@ function captionsStatusText(captionsCell: Element): string {
  * Captions-scoped row state (Layout A). Never uses metadata cell「已发布」.
  * Unknown / missing cell → UNPARSEABLE (fail-closed), not CAPTIONS_MISSING.
  */
+/**
+ * 「（视频语言）」 marks Studio's SOURCE-language row (live 2026-10-22:
+ * `英语 （视频语言）`). Auto-translate reads from this row's captions.
+ */
+function isVideoLanguageRowLabel(label: string | undefined): boolean {
+  return /视频语言|video language/i.test(label ?? "");
+}
+
 function rowStateFromElement(el: Element): SubtitleRowState {
   const attr = el.getAttribute("data-subtitle-state");
   if (attr === "PENDING_PUBLISH") {
@@ -1663,11 +1676,11 @@ async function revealAndClickCaptionsAdd(
     const decision = await humanGate.request(
       {
         capability: "WRITE_COMMIT",
-        title: "Hover captions cell",
-        description: `Hover the captions cell (or open the editor) for ${lang.label} (${lang.code}), then Continue.`,
+        title: "请悬停字幕单元格",
+        description: `请悬停 ${lang.label}（${lang.code}）的字幕单元格（或直接打开编辑器），然后点击「确认」继续。`,
         consequences: [
-          "Luftballons could not stamp #captions-add via synthetic hover",
-          `Continue only after the ${lang.label} captions editor is open OR #captions-add is visible`,
+          "Luftballons 无法通过合成悬停戳出 #captions-add 按钮",
+          `请仅在 ${lang.label} 字幕编辑器已打开、或「添加」按钮可见后再确认`,
         ],
         reversible: false,
       },
@@ -2072,7 +2085,7 @@ export async function waitUntilCaptionsReady(
         );
       }
       onProgress?.(
-        `Waiting for auto-translate (${lang.label})… ${Math.round((Date.now() - waitStartedAt) / 1000)}s`,
+        `等待自动翻译（${lang.label}）… ${Math.round((Date.now() - waitStartedAt) / 1000)}s`,
       );
       await abortableDelay(100, signal);
     }
@@ -2087,11 +2100,11 @@ export async function waitUntilCaptionsReady(
     const decision = await humanGate.request(
       {
         capability: "WRITE_COMMIT",
-        title: "Confirm captions translation ready",
-        description: `Studio did not expose a reliable READY signal for ${lang.label} (${lang.code}). Continue only when translation looks finished in the editor.`,
+        title: "确认字幕翻译已完成",
+        description: `Studio 未给出 ${lang.label}（${lang.code}）可靠的就绪信号。请仅在编辑器中翻译看起来已完成时再确认继续。`,
         consequences: [
-          "Publish will be refused if cues are still missing after Continue",
-          "Do not Continue while「正在翻译」is visible",
+          "若字幕内容仍为空白，确认后发布仍会被拒绝",
+          "「正在翻译」可见时请勿确认",
         ],
         reversible: false,
       },
@@ -2378,7 +2391,20 @@ async function addTranslateAndPublishLanguage(
 function buildResult(
   summary: SubtitleMultilangSummary,
   warnings: TaskWarning[],
+  onPublishedLanguages?: (langs: SubtitleLanguage[]) => void,
 ): TaskResult {
+  // Remember the published set for the next run's default selection
+  // (2026-10-22 requirement) — only real SUCCESS publishes count.
+  const published = summary.outcomes
+    .filter((o) => o.status === "SUCCESS")
+    .map((o) => ({ code: o.code, label: o.label }));
+  if (published.length > 0) {
+    try {
+      onPublishedLanguages?.(published);
+    } catch {
+      // Preference-only: never fail a task over it.
+    }
+  }
   const line = formatOutcomesSummary(summary.outcomes);
   if (summary.humanRejected) {
     // audit #5 (2026-10-21): a rejected WRITE_COMMIT is CANCELLED, not COMPLETED.
@@ -2462,7 +2488,7 @@ export async function runSubtitleMultilangWorkflow(
   }
 
   // 1) verify current video
-  ctx.setProgress("Verifying current video…", "RUNNING");
+  ctx.setProgress("正在校验当前视频…", "RUNNING");
   throwIfAborted(ctx.signal);
   const videoId = extractVideoIdFromHref(deps.getHref());
   if (!videoId) {
@@ -2486,7 +2512,7 @@ export async function runSubtitleMultilangWorkflow(
   };
 
   // 2) navigate to subtitles (video-scoped target via NavigationService)
-  ctx.setProgress("Opening subtitles…", "RUNNING");
+  ctx.setProgress("正在打开字幕页…", "RUNNING");
   throwIfAborted(ctx.signal);
   try {
     await deps.navigation.navigate("SUBTITLES", ctx.signal);
@@ -2515,7 +2541,7 @@ export async function runSubtitleMultilangWorkflow(
   }
 
   // 3) read existing languages (three-state parse; wait if rows still loading)
-  ctx.setProgress("Reading existing subtitle languages…", "RUNNING");
+  ctx.setProgress("正在读取现有字幕语言…", "RUNNING");
   throwIfAborted(ctx.signal);
   const parsed = await waitForLanguageListSettled(deps.dom, ctx.signal);
   if (parsed.kind === "MISSING") {
@@ -2554,6 +2580,15 @@ export async function runSubtitleMultilangWorkflow(
     existingRows.map((r) => [r.code.toLowerCase(), r] as const),
   );
 
+  // 2026-10-22 requirement: the 「（视频语言）」 row is Studio's auto-translate
+  // SOURCE. While its captions are not published, auto-translate is
+  // unavailable (自动翻译 greys out on the real device) — never attempt any
+  // auto add/translate/publish.
+  const sourceRow = existingRows.find((r) => isVideoLanguageRowLabel(r.label));
+  const sourceBlocked =
+    !!sourceRow && !isCaptionsPublishedState(sourceRow.state);
+  let sourceSkipped = false;
+
   // 4) diff: captions-cell scoped (never treat metadata「已发布」as skip)
   type WorkMode = "add" | "resume_captions" | "resume_draft";
   type WorkItem = { lang: SubtitleLanguage; mode: WorkMode };
@@ -2563,6 +2598,16 @@ export async function runSubtitleMultilangWorkflow(
   for (const lang of targets) {
     throwIfAborted(ctx.signal);
     const row = rowByCode.get(lang.code.toLowerCase());
+    if (sourceBlocked && !(row && isCaptionsPublishedState(row.state))) {
+      sourceSkipped = true;
+      outcomes.push({
+        code: lang.code,
+        label: lang.label,
+        status: "SKIPPED",
+        detail: `视频语言（${(sourceRow?.label ?? "").trim()}）字幕未发布，自动翻译不可用`,
+      });
+      continue;
+    }
     if (!row) {
       workItems.push({ lang, mode: "add" });
       continue;
@@ -2610,6 +2655,22 @@ export async function runSubtitleMultilangWorkflow(
     };
   }
 
+  if (sourceSkipped) {
+    // Deliberate policy skip — explain, never fail the task outright.
+    return {
+      status: "PARTIAL",
+      summary: `Subtitle multilang skipped: video-language captions not published (auto-translate unavailable). video=${videoId}; ${formatOutcomesSummary(outcomes)}`,
+      warnings: [
+        ...warnings,
+        {
+          code: "VIDEO_LANGUAGE_CAPTIONS_MISSING",
+          message:
+            "视频语言行（如「英语 （视频语言）」）字幕未发布，Studio 自动翻译不可用；已跳过全部自动添加/发布。请先为视频语言发布字幕后重试。",
+        },
+      ],
+    };
+  }
+
   // Re-run / idempotent path: nothing to do → no WRITE_COMMIT
   if (workItems.length === 0) {
     const summary: SubtitleMultilangSummary = {
@@ -2622,7 +2683,7 @@ export async function runSubtitleMultilangWorkflow(
       published: false,
       humanRejected: false,
     };
-    return buildResult(summary, warnings);
+    return buildResult(summary, warnings, deps.onPublishedLanguages);
   }
 
   // 5) Human Gate once, then per-language work
@@ -2631,18 +2692,21 @@ export async function runSubtitleMultilangWorkflow(
   ctx.capabilities.require("WRITE_REVERSIBLE");
   ctx.capabilities.require("WRITE_COMMIT");
   const consequenceLines = workQueue.map(
-    (w) => `${w.lang.label} (${w.lang.code}) [${w.mode}]`,
+    (w) =>
+      `${w.lang.label} (${w.lang.code}) [${
+        w.mode === "add" ? "新增" : w.mode === "resume_captions" ? "补字幕" : "续草稿"
+      }]`,
   );
-  ctx.setProgress("Waiting for human confirmation…", "WAITING_HUMAN");
+  ctx.setProgress("等待人工确认…", "WAITING_HUMAN");
   const decision = await ctx.humanGate.request(
     {
       capability: "WRITE_COMMIT",
-      title: "Publish subtitle languages",
-      description: `Add & publish the following subtitle languages on video ${videoId} via Studio auto-translate. This action cannot be undone from Luftballons.`,
+      title: "发布字幕语言",
+      description: `将通过 Studio 自动翻译，在视频 ${videoId} 上添加并发布下列字幕语言。该操作无法从 Luftballons 撤销。`,
       consequences: [
         ...consequenceLines,
-        "不可撤销 / irreversible WRITE_COMMIT",
-        "Languages are processed one-at-a-time (Studio card / hover-add path)",
+        "不可撤销 / 不可回滚的写入操作（WRITE_COMMIT）",
+        "语言将逐个处理（Studio 卡片 / 悬停添加路径）",
       ],
       reversible: false,
     },
@@ -2652,7 +2716,7 @@ export async function runSubtitleMultilangWorkflow(
   if (ctx.signal.aborted) {
     throw new DOMException("Aborted", "AbortError");
   }
-  ctx.setProgress("Resuming…", "RUNNING");
+  ctx.setProgress("正在续传字幕…", "RUNNING");
 
   if (decision === "REJECTED") {
     for (const item of workQueue) {
@@ -2671,6 +2735,7 @@ export async function runSubtitleMultilangWorkflow(
         humanRejected: true,
       },
       warnings,
+      deps.onPublishedLanguages,
     );
   }
 
@@ -2683,7 +2748,7 @@ export async function runSubtitleMultilangWorkflow(
     if (!before.ok) {
       return bindingFailureResult(videoId, before, warnings, outcomes);
     }
-    ctx.setProgress(`Adding & publishing ${lang.label}…`, "RUNNING");
+    ctx.setProgress(`正在添加并发布 ${lang.label}…`, "RUNNING");
     try {
       if (item.mode === "add") {
         await addTranslateAndPublishLanguage(
@@ -2870,5 +2935,6 @@ export async function runSubtitleMultilangWorkflow(
       humanRejected: false,
     },
     warnings,
+    deps.onPublishedLanguages,
   );
 }

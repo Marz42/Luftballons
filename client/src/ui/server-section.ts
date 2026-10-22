@@ -22,7 +22,7 @@ export function createServerSection(runtime: Runtime): ServerSectionHandle {
 
   const title = document.createElement("div");
   title.className = "lb-section-title";
-  text(title, "Server");
+  text(title, "服务器");
 
   const hint = document.createElement("div");
   hint.className = "lb-server-hint";
@@ -44,18 +44,18 @@ export function createServerSection(runtime: Runtime): ServerSectionHandle {
   const tokenLabel = document.createElement("label");
   tokenLabel.className = "lb-field";
   const tokenCaption = document.createElement("span");
-  text(tokenCaption, "Installation Token");
+  text(tokenCaption, "安装令牌");
   const tokenInput = document.createElement("input");
   tokenInput.type = "password";
   tokenInput.autocomplete = "off";
-  tokenInput.placeholder = "Bearer token";
+  tokenInput.placeholder = "Bearer 令牌";
   tokenInput.setAttribute("data-lb-server-token", "true");
   tokenLabel.append(tokenCaption, tokenInput);
 
   const enrollLabel = document.createElement("label");
   enrollLabel.className = "lb-field";
   const enrollCaption = document.createElement("span");
-  text(enrollCaption, "Enrollment（仅注册时）");
+  text(enrollCaption, "注册密钥（仅注册时使用）");
   const enrollInput = document.createElement("input");
   enrollInput.type = "password";
   enrollInput.autocomplete = "off";

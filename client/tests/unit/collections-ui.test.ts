@@ -139,7 +139,7 @@ describe("Collections UI (P1-T4)", () => {
       ".lb-collections-empty",
     ) as HTMLElement;
     expect(empty.hidden).toBe(false);
-    expect(empty.textContent).toContain("No collections yet");
+    expect(empty.textContent).toContain("暂无采集记录");
     section.root.remove();
   });
 

@@ -1,4 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  createMemorySecretStorage,
+  setTokenStorage,
+} from "../../src/services/network-settings.js";
+import {
+  loadLastPublishedLanguages,
+} from "../../src/services/language-prefs.js";
 import { ModuleRegistry } from "../../src/runtime/module-registry.js";
 import { TaskRunner } from "../../src/runtime/task-runner.js";
 import { createLogger } from "../../src/services/logger.js";
@@ -967,6 +974,76 @@ describe("youtube.subtitle.multilang (FT-011 / P4-T1…T5)", () => {
     expect(runner.getState(id), summary).toBe("COMPLETED");
     expect(summary).toMatch(/Deutsch\(de\) SUCCESS/);
     expect(fixture.clickCounts.option).toBe(1);
+  }, 15_000);
+
+  it("video-language row without published captions → ALL auto publish skipped (2026-10-22 rule)", async () => {
+    // Studio auto-translate reads from the 「（视频语言）」 row's captions.
+    // While those are unpublished it greys out 自动翻译 on the real device —
+    // the workflow must skip every add/translate/publish and say why.
+    fixture = mountStudioFixture({
+      page: "VIDEO_DETAILS",
+      subtitles: {
+        existingLanguages: [
+          {
+            code: "en",
+            label: "英语 （视频语言）",
+            state: "PENDING_PUBLISH",
+            captionsStatus: "dash",
+            metadataPublished: true,
+          },
+        ],
+        pickerLanguages: [{ code: "de", label: "Deutsch" }],
+      },
+    });
+    const runner = makeRunner(
+      createFixtureSubtitleModule(fixture, {
+        initialLanguages: [
+          { code: "en", label: "English" },
+          { code: "de", label: "Deutsch" },
+        ],
+      }),
+      createAutoApproveGate(),
+    );
+    const id = await runner.start("youtube.subtitle.multilang");
+    await vi.waitFor(() =>
+      expect(["COMPLETED", "PARTIAL", "FAILED"]).toContain(runner.getState(id)),
+    { timeout: 12_000 });
+    expect(fixture.clickCounts.addLanguage).toBe(0);
+    expect(fixture.clickCounts.option).toBe(0);
+    expect(fixture.clickCounts.publish).toBe(0);
+    const result = runner.getSnapshot(id).result;
+    expect(result?.summary).toMatch(/video-language captions not published/i);
+    expect(
+      result?.warnings?.some((w) => w.code === "VIDEO_LANGUAGE_CAPTIONS_MISSING"),
+    ).toBe(true);
+  }, 15_000);
+
+  it("records the published set after success and defaults to it next run", async () => {
+    setTokenStorage(createMemorySecretStorage());
+    fixture = mountStudioFixture({
+      page: "VIDEO_DETAILS",
+      subtitles: {
+        existingLanguages: [],
+        pickerLanguages: [{ code: "de", label: "Deutsch" }],
+      },
+    });
+    const runner = makeRunner(
+      createFixtureSubtitleModule(fixture, {
+        initialLanguages: [{ code: "de", label: "Deutsch" }],
+      }),
+      createAutoApproveGate(),
+    );
+    const id = await runner.start("youtube.subtitle.multilang");
+    await vi.waitFor(() =>
+      expect(["COMPLETED", "PARTIAL", "FAILED"]).toContain(runner.getState(id)),
+    { timeout: 12_000 });
+    expect(runner.getState(id)).toBe("COMPLETED");
+    expect(loadLastPublishedLanguages()?.map((l) => l.code)).toEqual(["de"]);
+
+    // Next construction without explicit initialLanguages → same set checked.
+    const next = createFixtureSubtitleModule(fixture);
+    expect(next.getTargetLanguages().map((l) => l.code)).toEqual(["de"]);
+    setTokenStorage(createMemorySecretStorage());
   }, 15_000);
 
   it("P1-live: disabled (grey) auto-translate is skipped → publish still succeeds", async () => {
